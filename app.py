@@ -294,6 +294,8 @@ def mobile_round_for_fixture(home_team, away_team, dt):
         ("Bosnia & Herzegovina", "Switzerland"): "Round 2",
         ("Canada", "Qatar"): "Round 2",
         ("Qatar", "Canada"): "Round 2",
+        ("Colombia", "DR Congo"): "Round 2",
+        ("DR Congo", "Colombia"): "Round 2",
     }
     override = overrides.get((home_team, away_team))
     if override:
@@ -1335,6 +1337,8 @@ ROUND_OVERRIDES = {
     ("Bosnia & Herzegovina", "Switzerland"): "Round 2",
     ("Canada", "Qatar"): "Round 2",
     ("Qatar", "Canada"): "Round 2",
+    ("Colombia", "DR Congo"): "Round 2",
+    ("DR Congo", "Colombia"): "Round 2",
 }
 
 
