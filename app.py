@@ -1,14 +1,17 @@
 import os
 import math
+import tempfile
 from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
+from pathlib import Path
 
 import pandas as pd
 import requests
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 from PIL import Image, ImageDraw, ImageFont
+from playwright.sync_api import sync_playwright
 
 try:
     from dotenv import load_dotenv
@@ -1893,12 +1896,319 @@ def build_export_image(fixtures_to_show, selected_round):
 
 @st.cache_data(show_spinner=False)
 def build_export_image_bytes(fixtures_to_show, selected_round, export_page, total_export_pages):
-    export_title = (
-        selected_round
-        if total_export_pages <= 1
-        else f"{selected_round} · Page {export_page} of {total_export_pages}"
+    html = build_export_html(fixtures_to_show, selected_round, export_page, total_export_pages)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        export_path = Path(tmp_dir) / "export.html"
+        export_path.write_text(html, encoding="utf-8")
+
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            page = browser.new_page(
+                viewport={"width": 1920, "height": 1080},
+                device_scale_factor=1,
+            )
+            page.goto(export_path.as_uri(), wait_until="networkidle")
+            page.wait_for_timeout(300)
+            png_bytes = page.screenshot(type="png", full_page=False)
+            browser.close()
+
+    return png_bytes
+
+
+def render_export_team_flag(team_name):
+    flag_url = get_flag_url(team_name)
+    if not flag_url:
+        return '<span class="export-flag-fallback" aria-hidden="true">&#9917;</span>'
+    return (
+        f'<img class="export-flag" src="{escape(flag_url)}" '
+        f'alt="{escape(str(team_name))} flag">'
     )
-    return build_export_image(fixtures_to_show, export_title).getvalue()
+
+
+def render_export_fixture_card(row):
+    return (
+        '<article class="export-card">'
+        '<div class="export-date">'
+        f'<strong>{escape(str(row.date))}</strong>'
+        f'<span>{escape(str(row.kickoff))}</span>'
+        '</div>'
+        '<div class="export-teams">'
+        '<div class="export-team-row">'
+        f'{render_export_team_flag(row.home_team)}'
+        f'<span class="export-team-name">{escape(str(row.home_team))}</span>'
+        '</div>'
+        '<div class="export-team-row">'
+        f'{render_export_team_flag(row.away_team)}'
+        f'<span class="export-team-name">{escape(str(row.away_team))}</span>'
+        '</div>'
+        '</div>'
+        '<div class="export-metric-col">'
+        '<div class="export-metric-head">GOALS</div>'
+        f'<div class="export-metric {goal_cell_class(row.home_xg)}">{format_projected_goals(row.home_xg)}</div>'
+        f'<div class="export-metric {goal_cell_class(row.away_xg)}">{format_projected_goals(row.away_xg)}</div>'
+        '</div>'
+        '<div class="export-metric-col">'
+        '<div class="export-metric-head">CS%</div>'
+        f'<div class="export-metric {cs_cell_class(row.home_cs)}">{format_clean_sheet(row.home_cs)}</div>'
+        f'<div class="export-metric {cs_cell_class(row.away_cs)}">{format_clean_sheet(row.away_cs)}</div>'
+        '</div>'
+        '</article>'
+    )
+
+
+def build_export_html(fixtures_to_show, selected_round, export_page, total_export_pages):
+    cards = "\n".join(
+        render_export_fixture_card(row)
+        for row in fixtures_to_show.head(10).itertuples(index=False)
+    )
+    subtitle = (
+        f"{selected_round} · Page {export_page} of {total_export_pages} · "
+        "Projected goals and clean sheet odds"
+    )
+
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=1920, initial-scale=1">
+  <style>
+    * {{
+      box-sizing: border-box;
+    }}
+
+    html,
+    body {{
+      width: 1920px;
+      height: 1080px;
+      margin: 0;
+      overflow: hidden;
+      background: #f3f6f9;
+      color: #111827;
+      font-family: Arial, "Segoe UI", sans-serif;
+    }}
+
+    .export-canvas {{
+      width: 1920px;
+      height: 1080px;
+      padding: 38px 60px 0;
+      background: #f3f6f9;
+      position: relative;
+    }}
+
+    .export-title {{
+      margin: 0;
+      font-size: 46px;
+      line-height: 1.05;
+      font-weight: 900;
+      letter-spacing: 0;
+    }}
+
+    .export-subtitle {{
+      margin: 12px 0 0;
+      color: #4b5563;
+      font-size: 24px;
+      font-weight: 600;
+    }}
+
+    .export-grid {{
+      position: absolute;
+      left: 60px;
+      top: 145px;
+      width: 1800px;
+      display: grid;
+      grid-template-columns: 850px 850px;
+      grid-template-rows: repeat(5, 135px);
+      grid-auto-flow: column;
+      gap: 18px 70px;
+    }}
+
+    .export-card {{
+      width: 850px;
+      height: 135px;
+      display: grid;
+      grid-template-columns: 115px 435px 145px 155px;
+      overflow: hidden;
+      background: #ffffff;
+      border: 1px solid #d8dee8;
+      border-radius: 12px;
+      box-shadow: 0 10px 20px rgba(23, 32, 42, 0.08);
+    }}
+
+    .export-date {{
+      background: #f5f7fa;
+      border-right: 1px solid #d8dee8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      text-align: center;
+      padding: 12px 8px;
+    }}
+
+    .export-date strong {{
+      font-size: 18px;
+      line-height: 1.12;
+      font-weight: 900;
+    }}
+
+    .export-date span {{
+      color: #4b5563;
+      font-size: 17px;
+      line-height: 1;
+      font-weight: 800;
+    }}
+
+    .export-teams {{
+      display: grid;
+      grid-template-rows: 1fr 1fr;
+      padding-top: 35px;
+      min-width: 0;
+    }}
+
+    .export-team-row {{
+      min-height: 50px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 18px;
+      border-bottom: 1px solid #d8dee8;
+      min-width: 0;
+    }}
+
+    .export-team-row:last-child {{
+      border-bottom: 0;
+    }}
+
+    .export-flag {{
+      width: 30px;
+      height: 30px;
+      object-fit: cover;
+      border-radius: 50%;
+      box-shadow: 0 0 0 1px #d8dee8;
+      background: #f4f6f8;
+      flex: 0 0 30px;
+    }}
+
+    .export-flag-fallback {{
+      width: 30px;
+      height: 30px;
+      border-radius: 50%;
+      background: #e5e7eb;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 15px;
+      flex: 0 0 30px;
+    }}
+
+    .export-team-name {{
+      font-size: 24px;
+      font-weight: 900;
+      line-height: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      min-width: 0;
+    }}
+
+    .export-metric-col {{
+      display: grid;
+      grid-template-rows: 35px 50px 50px;
+      border-left: 1px solid #d8dee8;
+    }}
+
+    .export-metric-head {{
+      min-height: 35px;
+      display: grid;
+      place-items: center;
+      background: #f5f7fa;
+      border-bottom: 1px solid #d8dee8;
+      color: #4b5563;
+      font-size: 16px;
+      font-weight: 900;
+      letter-spacing: 0;
+    }}
+
+    .export-metric {{
+      display: grid;
+      place-items: center;
+      min-height: 50px;
+      border-bottom: 1px solid #d8dee8;
+      font-size: 30px;
+      line-height: 1;
+      font-weight: 900;
+    }}
+
+    .export-metric:last-child {{
+      border-bottom: 0;
+    }}
+
+    .cell-dark-green {{
+      background: #28531d;
+      color: #ffffff;
+    }}
+
+    .cell-green {{
+      background: #00e676;
+      color: #064e3b;
+    }}
+
+    .cell-grey {{
+      background: #dedede;
+      color: #263238;
+    }}
+
+    .cell-light-red {{
+      background: #ffe6e6;
+      color: #b91c1c;
+    }}
+
+    .cell-red {{
+      background: #ff0f4f;
+      color: #ffffff;
+    }}
+
+    .cell-dark-red {{
+      background: #8b002f;
+      color: #ffffff;
+    }}
+
+    .cell-empty {{
+      background: #f1f5f9;
+      color: #64748b;
+    }}
+
+    .export-footer {{
+      position: absolute;
+      left: 60px;
+      right: 60px;
+      top: 990px;
+      padding-top: 26px;
+      border-top: 2px solid #d1d5db;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #111827;
+      font-size: 18px;
+    }}
+  </style>
+</head>
+<body>
+  <section class="export-canvas">
+    <h1 class="export-title">FPL Cartel World Cup Odds Dashboard</h1>
+    <p class="export-subtitle">{escape(subtitle)}</p>
+    <main class="export-grid">
+      {cards}
+    </main>
+    <footer class="export-footer">
+      <div>Graphics by <strong>FPL Cartel</strong></div>
+      <div>Source: live odds via <strong>The Odds API</strong></div>
+    </footer>
+  </section>
+</body>
+</html>"""
 
 
 def render_team_flag(team_name):
