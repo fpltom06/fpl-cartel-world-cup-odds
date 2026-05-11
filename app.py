@@ -586,7 +586,7 @@ def render_mobile_cards(fixtures):
     return f'<section class="mobile-card-list">{cards}</section>'
 
 
-def render_mobile_app():
+def mobile_styles():
     st.markdown(
         """
         <style>
@@ -793,6 +793,15 @@ def render_mobile_app():
                 }
             }
         </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_mobile_dashboard():
+    mobile_styles()
+    st.markdown(
+        """
         <section class="mobile-title">
             <h1>FPL Cartel World Cup Odds Dashboard</h1>
             <p>Live odds via The Odds API</p>
@@ -822,12 +831,7 @@ def render_mobile_app():
     st.markdown(render_mobile_cards(fixtures_page), unsafe_allow_html=True)
 
 
-if view == "mobile":
-    render_mobile_app()
-    st.stop()
-
-
-st.markdown(
+DESKTOP_STYLE = (
     """
     <style>
         :root {
@@ -1223,9 +1227,12 @@ st.markdown(
             }
         }
     </style>
-    """,
-    unsafe_allow_html=True,
+    """
 )
+
+
+def desktop_styles():
+    st.markdown(DESKTOP_STYLE, unsafe_allow_html=True)
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -1703,8 +1710,6 @@ def build_export_image(fixtures_to_show, selected_round):
     CARD_H = 110
     GAP_X = 70
     GAP_Y = 14
-    FOOTER_GAP = 55
-    FOOTER_H = 70
     CARD_RADIUS = 12
     BORDER = 2
     INNER_PAD = 2
@@ -1718,8 +1723,7 @@ def build_export_image(fixtures_to_show, selected_round):
     bg = "#f3f6f9"
     fixture_count = len(fixtures_to_show)
     rows_needed = math.ceil(fixture_count / 2) if fixture_count else 0
-    content_h = START_Y + rows_needed * (CARD_H + GAP_Y)
-    EXPORT_H = max(BASE_H, content_h + FOOTER_GAP + FOOTER_H)
+    EXPORT_H = BASE_H
 
     img = Image.new("RGB", (EXPORT_W, EXPORT_H), hex_to_rgb(bg))
     draw = ImageDraw.Draw(img)
@@ -1854,7 +1858,7 @@ def build_export_image(fixtures_to_show, selected_round):
         )
 
     max_card_bottom = START_Y + rows_needed * (CARD_H + GAP_Y)
-    footer_y = max_card_bottom + 35
+    footer_y = min(max_card_bottom + 35, 980)
     divider_y = footer_y - 22
     footer_text_y = footer_y + 10
 
@@ -1958,138 +1962,115 @@ def render_export_area(fixtures):
     )
 
 
-raw_api_response, api_error, _api_status_code = fetch_world_cup_odds()
-live_fixtures = parse_odds_response(raw_api_response)
-using_live_data = not live_fixtures.empty
+def render_desktop_dashboard():
+    desktop_styles()
 
-status_text = "Live odds via The Odds API" if using_live_data else "Sample fallback data"
-display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
-st.markdown(
-    f"""
-    <section class="title-section">
-        <div>
-            <h1>FPL Cartel World Cup Odds Dashboard</h1>
-            <p>Projected goals and model-estimated clean sheet percentages by round.</p>
-        </div>
-        <div class="status-chip">{status_text}</div>
-    </section>
-    """,
-    unsafe_allow_html=True,
-)
+    raw_api_response, api_error, _api_status_code = fetch_world_cup_odds()
+    live_fixtures = parse_odds_response(raw_api_response)
+    using_live_data = not live_fixtures.empty
 
-if api_error:
-    st.warning(f"Could not fetch live odds from The Odds API: {api_error}")
-
-if not using_live_data:
-    st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
-
-fixture_options = display_fixtures["fixture_set"].drop_duplicates().tolist()
-control_cols = st.columns([1.2, 1.1, 1.2])
-
-with control_cols[0]:
-    fixture_set = st.segmented_control(
-        "Fixture set",
-        fixture_options,
-        default=fixture_options[0],
-    )
-
-available_rounds = (
-    display_fixtures.loc[display_fixtures["fixture_set"] == fixture_set, "round"]
-    .drop_duplicates()
-    .tolist()
-)
-round_options = sorted(available_rounds, key=round_sort_key)
-fixture_records = (
-    display_fixtures.loc[display_fixtures["fixture_set"] == fixture_set]
-    .to_dict("records")
-)
-default_round = get_current_round(fixture_records)
-default_round_index = (
-    round_options.index(default_round)
-    if default_round in round_options
-    else 0
-)
-
-with control_cols[1]:
-    selected_round = st.selectbox(
-        "Round",
-        round_options,
-        index=default_round_index,
-    )
-
-filtered = display_fixtures[display_fixtures["fixture_set"] == fixture_set]
-filtered = filtered[filtered["round"] == selected_round]
-
-with control_cols[2]:
-    export_state_key = "export_image_state"
-    export_request_key = f"{fixture_set}|{selected_round}|{len(filtered)}"
-    cached_export = st.session_state.get(export_state_key, {})
-
-    if cached_export.get("request_key") != export_request_key:
-        st.session_state.pop(export_state_key, None)
-        cached_export = {}
-
-    if st.button("Download image", key="prepare_export_image"):
-        st.session_state[export_state_key] = {
-            "request_key": export_request_key,
-            "data": build_export_image_bytes(filtered, selected_round),
-        }
-        cached_export = st.session_state[export_state_key]
-
-    if cached_export.get("data"):
-        st.download_button(
-            "Save PNG",
-            data=cached_export["data"],
-            file_name=(
-                "fpl-cartel-world-cup-odds-"
-                f"{selected_round.lower().replace(' ', '-')}-full.png"
-            ),
-            mime="image/png",
-        )
-
-if filtered.empty:
+    status_text = "Live odds via The Odds API" if using_live_data else "Sample fallback data"
+    display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
     st.markdown(
-        '<div class="empty-note">No fixtures available for this selection.</div>',
+        f"""
+        <section class="title-section">
+            <div>
+                <h1>FPL Cartel World Cup Odds Dashboard</h1>
+                <p>Projected goals and model-estimated clean sheet percentages by round.</p>
+            </div>
+            <div class="status-chip">{status_text}</div>
+        </section>
+        """,
         unsafe_allow_html=True,
     )
-else:
-    total_fixtures = len(filtered)
-    page_size = 12
-    total_pages = max(1, math.ceil(total_fixtures / page_size))
-    page_key = f"fixture_page_{fixture_set}_{selected_round}_{page_size}"
-    page_key = page_key.replace(" ", "_").replace("/", "_")
 
-    if page_key not in st.session_state:
-        st.session_state[page_key] = 0
+    if api_error:
+        st.warning(f"Could not fetch live odds from The Odds API: {api_error}")
 
-    st.session_state[page_key] = min(st.session_state[page_key], total_pages - 1)
-    current_page = st.session_state[page_key]
+    if not using_live_data:
+        st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
 
-    page_start = current_page * page_size
-    page_end = min(page_start + page_size, total_fixtures)
-    paged_fixtures = filtered.iloc[page_start:page_end]
+    fixture_options = display_fixtures["fixture_set"].drop_duplicates().tolist()
+    control_cols = st.columns([1.2, 1.1, 1.2])
 
-    page_cols = st.columns([1, 1.4, 1])
-    with page_cols[0]:
-        if st.button("Previous", disabled=current_page == 0):
-            st.session_state[page_key] = max(0, current_page - 1)
-            st.rerun()
-    with page_cols[1]:
+    with control_cols[0]:
+        fixture_set = st.segmented_control(
+            "Fixture set",
+            fixture_options,
+            default=fixture_options[0],
+        )
+
+    available_rounds = (
+        display_fixtures.loc[display_fixtures["fixture_set"] == fixture_set, "round"]
+        .drop_duplicates()
+        .tolist()
+    )
+    round_options = sorted(available_rounds, key=round_sort_key)
+    fixture_records = (
+        display_fixtures.loc[display_fixtures["fixture_set"] == fixture_set]
+        .to_dict("records")
+    )
+    default_round = get_current_round(fixture_records)
+    default_round_index = (
+        round_options.index(default_round)
+        if default_round in round_options
+        else 0
+    )
+
+    with control_cols[1]:
+        selected_round = st.selectbox(
+            "Round",
+            round_options,
+            index=default_round_index,
+        )
+
+    filtered = display_fixtures[display_fixtures["fixture_set"] == fixture_set]
+    filtered = filtered[filtered["round"] == selected_round]
+
+    with control_cols[2]:
+        export_state_key = "export_image_state"
+        export_request_key = f"{fixture_set}|{selected_round}|{len(filtered)}"
+        cached_export = st.session_state.get(export_state_key, {})
+
+        if cached_export.get("request_key") != export_request_key:
+            st.session_state.pop(export_state_key, None)
+            cached_export = {}
+
+        if st.button("Download image", key="prepare_export_image"):
+            st.session_state[export_state_key] = {
+                "request_key": export_request_key,
+                "data": build_export_image_bytes(filtered, selected_round),
+            }
+            cached_export = st.session_state[export_state_key]
+
+        if cached_export.get("data"):
+            st.download_button(
+                "Save PNG",
+                data=cached_export["data"],
+                file_name=(
+                    "fpl-cartel-world-cup-odds-"
+                    f"{selected_round.lower().replace(' ', '-')}-full.png"
+                ),
+                mime="image/png",
+            )
+
+    if filtered.empty:
         st.markdown(
-            (
-                f'<div class="empty-note">Showing fixtures {page_start + 1}-'
-                f'{page_end} of {total_fixtures}</div>'
-            ),
+            '<div class="empty-note">No fixtures available for this selection.</div>',
             unsafe_allow_html=True,
         )
-    with page_cols[2]:
-        if st.button("Next", disabled=current_page >= total_pages - 1):
-            st.session_state[page_key] = min(total_pages - 1, current_page + 1)
-            st.rerun()
+    else:
+        st.markdown(render_export_area(filtered), unsafe_allow_html=True)
 
-    st.markdown(render_export_area(paged_fixtures), unsafe_allow_html=True)
+    with st.expander("Debug API response", expanded=False):
+        if api_error:
+            st.error(api_error)
+        st.json(raw_api_response)
 
-with st.expander("Debug API response", expanded=False):
-    if api_error:
-        st.error(api_error)
-    st.json(raw_api_response)
+
+is_mobile = view == "mobile"
+
+if is_mobile:
+    render_mobile_dashboard()
+else:
+    render_desktop_dashboard()
