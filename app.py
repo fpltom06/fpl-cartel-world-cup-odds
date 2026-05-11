@@ -1628,15 +1628,15 @@ def hex_to_rgb(hex_color):
 
 
 def load_font(size, bold=False):
-    candidates = [
+    paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
-        "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
     ]
-    for font_path in candidates:
+    for font_path in paths:
         try:
             return ImageFont.truetype(font_path, size)
-        except OSError:
-            continue
+        except Exception:
+            pass
     return ImageFont.load_default()
 
 
@@ -1683,7 +1683,7 @@ def load_flag_image(team):
         if not flag_bytes:
             return None
         flag = Image.open(BytesIO(flag_bytes)).convert("RGBA")
-        flag = flag.resize((28, 28))
+        flag = flag.resize((34, 24))
         _FLAG_CACHE[code] = flag
         return flag
     except Exception:
@@ -1696,10 +1696,10 @@ def draw_flag_badge(img, draw, team, x, y, font):
         img.paste(flag, (int(x), int(y)), flag)
         return
 
-    draw.ellipse((x, y, x + 28, y + 28), fill=hex_to_rgb("#e5e7eb"))
+    draw.rounded_rectangle((x, y, x + 34, y + 24), radius=5, fill=hex_to_rgb("#e5e7eb"))
     draw_text_center(
         draw,
-        (x, y, x + 28, y + 28),
+        (x, y, x + 34, y + 24),
         "?",
         font,
         hex_to_rgb("#64748b"),
@@ -1709,65 +1709,54 @@ def draw_flag_badge(img, draw, team, x, y, font):
 def build_export_image(fixtures_to_show, selected_round):
     EXPORT_W = 1920
     EXPORT_H = 1080
-    MARGIN_X = 60
-    START_Y = 155
-    CARD_W = 850
-    CARD_H = 135
-    GAP_X = 70
+    BG = "#f3f6f9"
+    LEFT_X = 55
+    RIGHT_X = 985
+    START_Y = 145
+    CARD_W = 875
+    CARD_H = 140
     GAP_Y = 18
-    FOOTER_GAP = 55
-    FOOTER_H = 70
-    CARD_RADIUS = 12
+    CARD_RADIUS = 10
     BORDER = 2
     INNER_PAD = 2
-    DATE_W = 115
-    TEAM_W = 435
-    PROJ_W = 145
-    CS_W = 155
-    HEADER_H = 35
-    ROW_H = 50
+    DATE_W = 120
+    TEAM_W = 515
+    PROJ_W = 120
+    CS_W = 120
+    HEADER_H = 32
+    ROW_H = 54
     FOOTER_DIVIDER_Y = 990
-    FOOTER_TEXT_Y = 1020
+    FOOTER_TEXT_Y = 1022
 
-    bg = "#f3f6f9"
+    bg = BG
     fixture_count = len(fixtures_to_show)
 
     img = Image.new("RGB", (EXPORT_W, EXPORT_H), hex_to_rgb(bg))
     draw = ImageDraw.Draw(img)
 
-    title_font = load_font(46, bold=True)
+    title_font = load_font(48, bold=True)
     subtitle_font = load_font(24)
-    team_font = load_font(24, bold=True)
-    small_font = load_font(18)
+    date_font = load_font(18, bold=True)
     time_font = load_font(17)
-    metric_head_font = load_font(16, bold=True)
+    team_font = load_font(25, bold=True)
+    header_font = load_font(14, bold=True)
     metric_font = load_font(30, bold=True)
     footer_font = load_font(18)
     footer_bold = load_font(18, bold=True)
     badge_font = load_font(15, bold=True)
 
     draw.text(
-        (MARGIN_X, 36),
+        (LEFT_X, 35),
         "FPL Cartel World Cup Odds Dashboard",
         font=title_font,
         fill=hex_to_rgb("#111827"),
     )
     draw.text(
-        (MARGIN_X, 94),
+        (LEFT_X, 92),
         f"{selected_round} - Projected goals and clean sheet odds",
         font=subtitle_font,
         fill=hex_to_rgb("#4b5563"),
     )
-    draw.text(
-        (MARGIN_X, 122),
-        f"Showing {fixture_count} fixtures",
-        font=small_font,
-        fill=hex_to_rgb("#4b5563"),
-    )
-
-    left_x = MARGIN_X
-    right_x = MARGIN_X + CARD_W + GAP_X
-    max_card_bottom = START_Y
 
     for index, row in enumerate(fixtures_to_show.itertuples(index=False)):
         if index >= 10:
@@ -1776,10 +1765,8 @@ def build_export_image(fixtures_to_show, selected_round):
         col = 0 if index < 5 else 1
         row_position = index if index < 5 else index - 5
 
-        x = left_x if col == 0 else right_x
+        x = LEFT_X if col == 0 else RIGHT_X
         y = START_Y + row_position * (CARD_H + GAP_Y)
-
-        max_card_bottom = max(max_card_bottom, y + CARD_H)
 
         date_x = x
         team_x = x + DATE_W
@@ -1789,12 +1776,7 @@ def build_export_image(fixtures_to_show, selected_round):
         metric_right = x + CARD_W - BORDER - INNER_PAD
         metric_bottom = y + CARD_H - BORDER - INNER_PAD
 
-        # Draw shadow, full card, square metric cells, then redraw the border last.
-        draw.rounded_rectangle(
-            (x + 5, y + 7, card_right_x + 5, y + CARD_H + 7),
-            radius=CARD_RADIUS,
-            fill=hex_to_rgb("#e3e9ef"),
-        )
+        # Draw full card first, then square metric cells, then redraw the border last.
         draw.rounded_rectangle(
             (x, y, card_right_x, y + CARD_H),
             radius=CARD_RADIUS,
@@ -1845,7 +1827,7 @@ def build_export_image(fixtures_to_show, selected_round):
             draw,
             (date_x + 8, y + 22, team_x - 8, y + 68),
             str(row.date),
-            small_font,
+            date_font,
             hex_to_rgb("#111827"),
         )
         draw_text_center(
@@ -1858,26 +1840,26 @@ def build_export_image(fixtures_to_show, selected_round):
 
         home_row_y = y + HEADER_H
         away_row_y = y + HEADER_H + ROW_H
-        draw_flag_badge(img, draw, row.home_team, team_x + 18, home_row_y + 11, badge_font)
-        draw_flag_badge(img, draw, row.away_team, team_x + 18, away_row_y + 11, badge_font)
-        draw.text((team_x + 58, home_row_y + 13), str(row.home_team), font=team_font, fill=hex_to_rgb("#111827"))
-        draw.text((team_x + 58, away_row_y + 13), str(row.away_team), font=team_font, fill=hex_to_rgb("#111827"))
+        draw_flag_badge(img, draw, row.home_team, team_x + 24, home_row_y + 15, badge_font)
+        draw_flag_badge(img, draw, row.away_team, team_x + 24, away_row_y + 15, badge_font)
+        draw.text((team_x + 72, home_row_y + 13), str(row.home_team), font=team_font, fill=hex_to_rgb("#111827"))
+        draw.text((team_x + 72, away_row_y + 13), str(row.away_team), font=team_font, fill=hex_to_rgb("#111827"))
 
-        draw_text_center(draw, (proj_x, y, cs_x, y + HEADER_H), "PROJ", metric_head_font, hex_to_rgb("#4b5563"))
-        draw_text_center(draw, (cs_x, y, card_right_x, y + HEADER_H), "CS %", metric_head_font, hex_to_rgb("#4b5563"))
+        draw_text_center(draw, (proj_x, y, cs_x, y + HEADER_H), "PROJ", header_font, hex_to_rgb("#4b5563"))
+        draw_text_center(draw, (cs_x, y, card_right_x, y + HEADER_H), "CS %", header_font, hex_to_rgb("#4b5563"))
 
         draw.rounded_rectangle(
             (x, y, card_right_x, y + CARD_H),
             radius=CARD_RADIUS,
-            outline=hex_to_rgb("#d8dee8"),
+            outline=hex_to_rgb("#d7dee8"),
             width=2,
         )
 
-    draw.line((MARGIN_X, FOOTER_DIVIDER_Y, EXPORT_W - MARGIN_X, FOOTER_DIVIDER_Y), fill=hex_to_rgb("#d1d5db"), width=2)
-    draw.text((MARGIN_X, FOOTER_TEXT_Y), "Graphics by ", font=footer_font, fill=hex_to_rgb("#111827"))
+    draw.line((LEFT_X, FOOTER_DIVIDER_Y, EXPORT_W - LEFT_X, FOOTER_DIVIDER_Y), fill=hex_to_rgb("#d1d5db"), width=2)
+    draw.text((LEFT_X, FOOTER_TEXT_Y), "Graphics by ", font=footer_font, fill=hex_to_rgb("#111827"))
     graphics_prefix_width = draw.textlength("Graphics by ", font=footer_font)
     draw.text(
-        (MARGIN_X + graphics_prefix_width, FOOTER_TEXT_Y),
+        (LEFT_X + graphics_prefix_width, FOOTER_TEXT_Y),
         "FPL Cartel",
         font=footer_bold,
         fill=hex_to_rgb("#111827"),
@@ -1885,7 +1867,7 @@ def build_export_image(fixtures_to_show, selected_round):
     source_text = "Source: live odds via The Odds API"
     source_width = draw.textlength(source_text, font=footer_font)
     draw.text(
-        (EXPORT_W - MARGIN_X - source_width, FOOTER_TEXT_Y),
+        (EXPORT_W - LEFT_X - source_width, FOOTER_TEXT_Y),
         source_text,
         font=footer_font,
         fill=hex_to_rgb("#111827"),
