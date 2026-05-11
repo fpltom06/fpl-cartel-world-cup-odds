@@ -372,54 +372,62 @@ def mobile_format_cs(value):
     return f"{int(value)}%"
 
 
-MOBILE_FLAG_EMOJIS = {
+TEAM_EMOJIS = {
     "Mexico": "🇲🇽",
     "South Africa": "🇿🇦",
+    "Uzbekistan": "🇺🇿",
+    "Colombia": "🇨🇴",
+    "Czech Republic": "🇨🇿",
+    "Switzerland": "🇨🇭",
+    "Bosnia & Herzegovina": "🇧🇦",
+    "Canada": "🇨🇦",
+    "Qatar": "🇶🇦",
+    "Jordan": "🇯🇴",
+    "Iraq": "🇮🇶",
+    "Cape Verde": "🇨🇻",
+    "Cabo Verde": "🇨🇻",
     "Argentina": "🇦🇷",
     "England": "🏴",
-    "Japan": "🇯🇵",
     "Brazil": "🇧🇷",
     "France": "🇫🇷",
     "Germany": "🇩🇪",
     "Spain": "🇪🇸",
     "Portugal": "🇵🇹",
     "Netherlands": "🇳🇱",
-    "Italy": "🇮🇹",
     "USA": "🇺🇸",
     "United States": "🇺🇸",
-    "Canada": "🇨🇦",
-    "Morocco": "🇲🇦",
     "Croatia": "🇭🇷",
     "Belgium": "🇧🇪",
     "Uruguay": "🇺🇾",
-    "Colombia": "🇨🇴",
+    "Morocco": "🇲🇦",
+    "Japan": "🇯🇵",
+    "South Korea": "🇰🇷",
+    "Korea Republic": "🇰🇷",
+    "Saudi Arabia": "🇸🇦",
+    "Iran": "🇮🇷",
+    "IR Iran": "🇮🇷",
     "Australia": "🇦🇺",
     "Denmark": "🇩🇰",
-    "Switzerland": "🇨🇭",
     "Poland": "🇵🇱",
     "Senegal": "🇸🇳",
     "Ghana": "🇬🇭",
     "Nigeria": "🇳🇬",
     "Cameroon": "🇨🇲",
     "Serbia": "🇷🇸",
-    "Saudi Arabia": "🇸🇦",
-    "South Korea": "🇰🇷",
-    "Korea Republic": "🇰🇷",
-    "Iran": "🇮🇷",
-    "IR Iran": "🇮🇷",
-    "Qatar": "🇶🇦",
-    "Jordan": "🇯🇴",
-    "Iraq": "🇮🇶",
-    "Cape Verde": "🇨🇻",
-    "Cabo Verde": "🇨🇻",
-    "Uzbekistan": "🇺🇿",
-    "Czech Republic": "🇨🇿",
-    "Bosnia & Herzegovina": "🇧🇦",
+    "Tunisia": "🇹🇳",
+    "Egypt": "🇪🇬",
+    "Algeria": "🇩🇿",
+    "Scotland": "🏴",
+    "Wales": "🏴",
 }
 
 
-def mobile_team_flag(team_name):
-    return MOBILE_FLAG_EMOJIS.get(str(team_name).strip(), "⚽")
+def get_team_emoji(team_name):
+    if not team_name:
+        return "⚽"
+
+    clean = str(team_name).strip()
+    return TEAM_EMOJIS.get(clean, "⚽")
 
 
 def mobile_goal_cell_class(value):
@@ -551,12 +559,12 @@ def render_mobile_card(row):
         "</div>"
         '<div class="mobile-teams">'
         '<div class="mobile-team-row">'
-        f'<span class="mobile-flag">{mobile_team_flag(home)}</span>'
-        f'<span class="mobile-team-name">{escape(home)}</span>'
+        f'<span class="flag-emoji">{get_team_emoji(home)}</span>'
+        f'<span class="team-name">{escape(home)}</span>'
         "</div>"
         '<div class="mobile-team-row">'
-        f'<span class="mobile-flag">{mobile_team_flag(away)}</span>'
-        f'<span class="mobile-team-name">{escape(away)}</span>'
+        f'<span class="flag-emoji">{get_team_emoji(away)}</span>'
+        f'<span class="team-name">{escape(away)}</span>'
         "</div>"
         "</div>"
         '<div class="mobile-metric-col">'
@@ -673,15 +681,16 @@ def render_mobile_app():
                 border-bottom: 0;
             }
 
-            .mobile-flag {
-                width: 22px;
-                flex: 0 0 22px;
+            .flag-emoji {
+                width: 24px;
                 text-align: center;
+                margin-right: 6px;
+                display: inline-block;
                 font-size: 17px;
                 line-height: 1;
             }
 
-            .mobile-team-name {
+            .team-name {
                 font-size: 0.88rem;
                 font-weight: 850;
                 overflow: hidden;
