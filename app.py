@@ -54,6 +54,41 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+st.markdown(
+    """
+    <style>
+    #MainMenu {
+        visibility: hidden;
+    }
+
+    header {
+        visibility: hidden;
+    }
+
+    [data-testid="stToolbar"] {
+        display: none !important;
+    }
+
+    [data-testid="stDecoration"] {
+        display: none !important;
+    }
+
+    [data-testid="stStatusWidget"] {
+        display: none !important;
+    }
+
+    [data-testid="stHeader"] {
+        display: none !important;
+    }
+
+    .block-container {
+        padding-top: 1rem !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 query_params = st.query_params
 view = query_params.get("view", "desktop")
 
