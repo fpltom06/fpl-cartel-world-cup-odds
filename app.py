@@ -1,10 +1,8 @@
 import os
 import math
-import tempfile
 from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
-from pathlib import Path
 
 import pandas as pd
 import requests
@@ -1894,26 +1892,48 @@ def build_export_image(fixtures_to_show, selected_round):
     return output
 
 
-@st.cache_data(show_spinner=False)
 def build_export_image_bytes(fixtures_to_show, selected_round, export_page, total_export_pages):
+    try:
+        return build_export_with_playwright(
+            fixtures_to_show,
+            selected_round,
+            export_page,
+            total_export_pages,
+        ).getvalue()
+    except Exception:
+        st.warning("Browser export failed. Using fallback image export.")
+        return build_export_with_pil(
+            fixtures_to_show,
+            selected_round,
+            export_page,
+            total_export_pages,
+        ).getvalue()
+
+
+def build_export_with_playwright(fixtures_to_show, selected_round, export_page, total_export_pages):
     html = build_export_html(fixtures_to_show, selected_round, export_page, total_export_pages)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        export_path = Path(tmp_dir) / "export.html"
-        export_path.write_text(html, encoding="utf-8")
-
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch()
-            page = browser.new_page(
-                viewport={"width": 1920, "height": 1080},
-                device_scale_factor=1,
-            )
-            page.goto(export_path.as_uri(), wait_until="networkidle")
-            page.wait_for_timeout(300)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        try:
+            page = browser.new_page(viewport={"width": 1920, "height": 1080})
+            page.set_content(html, wait_until="networkidle")
             png_bytes = page.screenshot(type="png", full_page=False)
+            return BytesIO(png_bytes)
+        finally:
             browser.close()
 
-    return png_bytes
+
+def build_export_with_pil(fixtures_to_show, selected_round, export_page, total_export_pages):
+    export_title = (
+        selected_round
+        if total_export_pages <= 1
+        else f"{selected_round} · Page {export_page} of {total_export_pages}"
+    )
+    return build_export_image(fixtures_to_show, export_title)
 
 
 def render_export_team_flag(team_name):
