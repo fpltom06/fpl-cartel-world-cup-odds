@@ -53,6 +53,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+query_params = st.query_params
+view = query_params.get("view", "desktop")
+
 
 SAMPLE_FIXTURES = pd.DataFrame(
     [
@@ -265,6 +268,232 @@ TEAM_FLAGS = {
     "Wales": "gb-wls",
     "Bahrain": "bh",
 }
+
+
+def mobile_parse_datetime(value):
+    if not value:
+        return datetime.max.replace(tzinfo=timezone.utc)
+
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return datetime.max.replace(tzinfo=timezone.utc)
+
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def mobile_round_for_fixture(home_team, away_team, dt):
+    overrides = {
+        ("Uzbekistan", "Colombia"): "Round 1",
+        ("Colombia", "Uzbekistan"): "Round 1",
+        ("Czech Republic", "South Africa"): "Round 2",
+        ("South Africa", "Czech Republic"): "Round 2",
+        ("Switzerland", "Bosnia & Herzegovina"): "Round 2",
+        ("Bosnia & Herzegovina", "Switzerland"): "Round 2",
+        ("Canada", "Qatar"): "Round 2",
+        ("Qatar", "Canada"): "Round 2",
+    }
+    override = overrides.get((home_team, away_team))
+    if override:
+        return override
+
+    if dt.month == 6 and dt.day <= 17:
+        return "Round 1"
+    if dt.month == 6 and 18 <= dt.day <= 23:
+        return "Round 2"
+    if dt.month == 6 and dt.day >= 24:
+        return "Round 3"
+    return "Knockouts"
+
+
+def mobile_round_sort_key(round_name):
+    return {
+        "Round 1": 0,
+        "Round 2": 1,
+        "Round 3": 2,
+        "Knockouts": 3,
+    }.get(str(round_name), 99)
+
+
+def mobile_extract_market(bookmaker, market_key):
+    for market in bookmaker.get("markets", []):
+        if market.get("key") == market_key:
+            return market
+    return {}
+
+
+def mobile_extract_total_and_spread(event):
+    home_team = event.get("home_team")
+    if not home_team:
+        return None, None
+
+    for bookmaker in event.get("bookmakers", []):
+        total = None
+        total_market = mobile_extract_market(bookmaker, "totals")
+        for outcome in total_market.get("outcomes", []):
+            point = outcome.get("point")
+            if isinstance(point, (int, float)):
+                total = float(point)
+                break
+
+        spread = None
+        spread_market = mobile_extract_market(bookmaker, "spreads")
+        for outcome in spread_market.get("outcomes", []):
+            point = outcome.get("point")
+            if outcome.get("name") == home_team and isinstance(point, (int, float)):
+                spread = float(point)
+                break
+
+        if total is not None and spread is not None:
+            return total, spread
+
+    return None, None
+
+
+def mobile_goal_projection(total_line, home_spread):
+    if total_line is None or home_spread is None:
+        return None, None
+
+    home_goals = (total_line - home_spread) / 2
+    return home_goals, total_line - home_goals
+
+
+def mobile_format_goals(value):
+    if value is None or pd.isna(value):
+        return "-"
+    return f"{float(value):.2f}"
+
+
+def mobile_format_cs(value):
+    if value is None or pd.isna(value):
+        return "-"
+    return f"{int(value)}%"
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_world_cup_odds_mobile():
+    api_key = ODDS_API_KEY
+    if not api_key or api_key == "your_api_key_here":
+        return []
+
+    params = {
+        "apiKey": api_key,
+        "regions": "uk,eu",
+        "markets": "h2h,totals,spreads",
+        "oddsFormat": "decimal",
+        "dateFormat": "iso",
+    }
+
+    try:
+        response = requests.get(ODDS_API_URL, params=params, timeout=12)
+        if response.status_code != 200:
+            return []
+        return response.json()
+    except (requests.RequestException, ValueError):
+        return []
+
+
+def mobile_parse_odds_response(payload):
+    rows = []
+    for event in payload or []:
+        commence_time = event.get("commence_time")
+        dt = mobile_parse_datetime(commence_time)
+        home_team = event.get("home_team", "Home team")
+        away_team = event.get("away_team", "Away team")
+        total_line, home_spread = mobile_extract_total_and_spread(event)
+        home_goals, away_goals = mobile_goal_projection(total_line, home_spread)
+        home_cs = round(math.exp(-away_goals) * 100) if away_goals is not None else None
+        away_cs = round(math.exp(-home_goals) * 100) if home_goals is not None else None
+
+        rows.append(
+            {
+                "Date": dt.strftime("%a %d %b") if dt.year < 9999 else "TBD",
+                "Time": dt.strftime("%H:%M") if dt.year < 9999 else "TBD",
+                "Home": home_team,
+                "Home Goals": mobile_format_goals(home_goals),
+                "Home CS%": mobile_format_cs(home_cs),
+                "Away": away_team,
+                "Away Goals": mobile_format_goals(away_goals),
+                "Away CS%": mobile_format_cs(away_cs),
+                "round": mobile_round_for_fixture(home_team, away_team, dt),
+                "commence_time_dt": dt,
+            }
+        )
+
+    return pd.DataFrame(rows).sort_values("commence_time_dt") if rows else pd.DataFrame(rows)
+
+
+def mobile_sample_fixtures():
+    rows = SAMPLE_FIXTURES.copy()
+    rows["round"] = rows.apply(
+        lambda row: mobile_round_for_fixture(
+            row["home_team"],
+            row["away_team"],
+            row["commence_time_dt"],
+        ),
+        axis=1,
+    )
+    rows = rows.rename(
+        columns={
+            "date": "Date",
+            "kickoff": "Time",
+            "home_team": "Home",
+            "home_xg": "Home Goals",
+            "home_cs": "Home CS%",
+            "away_team": "Away",
+            "away_xg": "Away Goals",
+            "away_cs": "Away CS%",
+        }
+    )
+    rows["Home Goals"] = rows["Home Goals"].apply(mobile_format_goals)
+    rows["Away Goals"] = rows["Away Goals"].apply(mobile_format_goals)
+    rows["Home CS%"] = rows["Home CS%"].apply(mobile_format_cs)
+    rows["Away CS%"] = rows["Away CS%"].apply(mobile_format_cs)
+    return rows
+
+
+def render_mobile_app():
+    st.title("FPL Cartel World Cup Odds")
+
+    live_fixtures = mobile_parse_odds_response(fetch_world_cup_odds_mobile())
+    fixtures = live_fixtures if not live_fixtures.empty else mobile_sample_fixtures()
+
+    round_options = sorted(
+        fixtures["round"].drop_duplicates().tolist(),
+        key=mobile_round_sort_key,
+    )
+    selected_round = st.selectbox("Round", round_options)
+
+    fixtures_to_show = fixtures[fixtures["round"] == selected_round]
+    page_size = 8
+    max_pages = max(1, math.ceil(len(fixtures_to_show) / page_size))
+    page_options = [f"Page {page_number}" for page_number in range(1, max_pages + 1)]
+    selected_page = st.selectbox("Page", page_options)
+    page_number = page_options.index(selected_page) + 1
+    start = (page_number - 1) * page_size
+    end = start + page_size
+
+    mobile_df = fixtures_to_show.iloc[start:end][
+        [
+            "Date",
+            "Time",
+            "Home",
+            "Home Goals",
+            "Home CS%",
+            "Away",
+            "Away Goals",
+            "Away CS%",
+        ]
+    ]
+
+    st.dataframe(mobile_df, use_container_width=True, hide_index=True)
+
+
+if view == "mobile":
+    render_mobile_app()
+    st.stop()
 
 
 st.markdown(
