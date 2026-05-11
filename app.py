@@ -7,7 +7,6 @@ from io import BytesIO
 import pandas as pd
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
 from streamlit.errors import StreamlitSecretNotFoundError
 from PIL import Image, ImageDraw, ImageFont
 
@@ -51,6 +50,7 @@ st.set_page_config(
     page_title="FPL Cartel World Cup Odds Dashboard",
     page_icon="WC",
     layout="wide",
+    initial_sidebar_state="collapsed",
 )
 
 
@@ -668,36 +668,7 @@ st.markdown(
 )
 
 
-def detect_mobile_viewport():
-    components.html(
-        """
-        <script>
-        try {
-            const parentWindow = window.parent || window;
-            const width = parentWindow.innerWidth || window.innerWidth || 1200;
-            const nextViewport = width <= 700 ? "mobile" : "desktop";
-            const url = new URL(parentWindow.location.href);
-            if (url.searchParams.get("_viewport") !== nextViewport) {
-                url.searchParams.set("_viewport", nextViewport);
-                parentWindow.history.replaceState(null, "", url.toString());
-                parentWindow.location.reload();
-            }
-        } catch (error) {
-            // The responsive CSS still keeps the page usable if viewport detection is blocked.
-        }
-        </script>
-        """,
-        height=0,
-        width=0,
-    )
-    return st.query_params.get("_viewport") == "mobile"
-
-
-IS_MOBILE = detect_mobile_viewport()
-PAGE_SIZE = 6 if IS_MOBILE else 12
-
-
-@st.cache_data(ttl=300, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def fetch_world_cup_odds():
     api_key = ODDS_API_KEY
     if not api_key or api_key == "your_api_key_here":
@@ -1432,36 +1403,55 @@ live_fixtures = parse_odds_response(raw_api_response)
 using_live_data = not live_fixtures.empty
 
 status_text = "Live odds via The Odds API" if using_live_data else "Sample fallback data"
-st.markdown(
-    f"""
-    <section class="title-section">
-        <div>
-            <h1>FPL Cartel World Cup Odds Dashboard</h1>
-            <p>Projected goals and model-estimated clean sheet percentages by round.</p>
-        </div>
-        <div class="status-chip">{status_text}</div>
-    </section>
-    """,
-    unsafe_allow_html=True,
-)
+display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
+mobile_mode = st.toggle("Mobile mode", value=False)
+
+if mobile_mode:
+    st.title("FPL Cartel World Cup Odds Dashboard")
+    st.caption("Projected goals and model-estimated clean sheet percentages by round.")
+    st.caption(status_text)
+else:
+    st.markdown(
+        f"""
+        <section class="title-section">
+            <div>
+                <h1>FPL Cartel World Cup Odds Dashboard</h1>
+                <p>Projected goals and model-estimated clean sheet percentages by round.</p>
+            </div>
+            <div class="status-chip">{status_text}</div>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
 
 if api_error:
     st.warning(f"Could not fetch live odds from The Odds API: {api_error}")
 
 if not using_live_data:
-    st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
+    if mobile_mode:
+        st.info(NO_LIVE_ODDS_MESSAGE)
+    else:
+        st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
 
-display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
+if mobile_mode:
+    st.warning("Mobile mode uses a lighter layout for stability.")
 
-control_cols = st.columns([1.2, 1.1, 1.2])
+fixture_options = display_fixtures["fixture_set"].drop_duplicates().tolist()
 
-with control_cols[0]:
-    fixture_options = display_fixtures["fixture_set"].drop_duplicates().tolist()
+if mobile_mode:
     fixture_set = st.segmented_control(
         "Fixture set",
         fixture_options,
         default=fixture_options[0],
     )
+else:
+    control_cols = st.columns([1.2, 1.1, 1.2])
+    with control_cols[0]:
+        fixture_set = st.segmented_control(
+            "Fixture set",
+            fixture_options,
+            default=fixture_options[0],
+        )
 
 available_rounds = (
     display_fixtures.loc[display_fixtures["fixture_set"] == fixture_set, "round"]
@@ -1480,18 +1470,25 @@ default_round_index = (
     else 0
 )
 
-with control_cols[1]:
+if mobile_mode:
     selected_round = st.selectbox(
         "Round",
         round_options,
         index=default_round_index,
     )
+else:
+    with control_cols[1]:
+        selected_round = st.selectbox(
+            "Round",
+            round_options,
+            index=default_round_index,
+        )
 
 filtered = display_fixtures[display_fixtures["fixture_set"] == fixture_set]
 filtered = filtered[filtered["round"] == selected_round]
 
-with control_cols[2]:
-    if not IS_MOBILE:
+if not mobile_mode:
+    with control_cols[2]:
         export_state_key = "export_image_state"
         export_request_key = f"{fixture_set}|{selected_round}|{len(filtered)}"
         cached_export = st.session_state.get(export_state_key, {})
@@ -1519,14 +1516,58 @@ with control_cols[2]:
             )
 
 if filtered.empty:
-    st.markdown(
-        '<div class="empty-note">No fixtures available for this selection.</div>',
-        unsafe_allow_html=True,
+    if mobile_mode:
+        st.info("No fixtures available for this selection.")
+    else:
+        st.markdown(
+            '<div class="empty-note">No fixtures available for this selection.</div>',
+            unsafe_allow_html=True,
+        )
+elif mobile_mode:
+    page_size = 5
+    total_fixtures = len(filtered)
+    max_pages = max(1, math.ceil(total_fixtures / page_size))
+    page = st.number_input("Page", min_value=1, max_value=max_pages, value=1)
+    start = (page - 1) * page_size
+    end = min(start + page_size, total_fixtures)
+    fixtures_page = filtered.iloc[start:end]
+
+    mobile_table = fixtures_page[
+        [
+            "date",
+            "kickoff",
+            "home_team",
+            "home_xg",
+            "home_cs",
+            "away_team",
+            "away_xg",
+            "away_cs",
+        ]
+    ].copy()
+    mobile_table["home_xg"] = mobile_table["home_xg"].apply(format_projected_goals)
+    mobile_table["away_xg"] = mobile_table["away_xg"].apply(format_projected_goals)
+    mobile_table["home_cs"] = mobile_table["home_cs"].apply(format_clean_sheet)
+    mobile_table["away_cs"] = mobile_table["away_cs"].apply(format_clean_sheet)
+    mobile_table = mobile_table.rename(
+        columns={
+            "date": "Date",
+            "kickoff": "Time",
+            "home_team": "Home",
+            "home_xg": "Home Proj",
+            "home_cs": "Home CS%",
+            "away_team": "Away",
+            "away_xg": "Away Proj",
+            "away_cs": "Away CS%",
+        }
     )
+
+    st.caption(f"Showing fixtures {start + 1}-{end} of {total_fixtures}")
+    st.dataframe(mobile_table, hide_index=True, use_container_width=True)
 else:
     total_fixtures = len(filtered)
-    total_pages = max(1, math.ceil(total_fixtures / PAGE_SIZE))
-    page_key = f"fixture_page_{fixture_set}_{selected_round}_{PAGE_SIZE}"
+    page_size = 12
+    total_pages = max(1, math.ceil(total_fixtures / page_size))
+    page_key = f"fixture_page_{fixture_set}_{selected_round}_{page_size}"
     page_key = page_key.replace(" ", "_").replace("/", "_")
 
     if page_key not in st.session_state:
@@ -1535,8 +1576,8 @@ else:
     st.session_state[page_key] = min(st.session_state[page_key], total_pages - 1)
     current_page = st.session_state[page_key]
 
-    page_start = current_page * PAGE_SIZE
-    page_end = min(page_start + PAGE_SIZE, total_fixtures)
+    page_start = current_page * page_size
+    page_end = min(page_start + page_size, total_fixtures)
     paged_fixtures = filtered.iloc[page_start:page_end]
 
     page_cols = st.columns([1, 1.4, 1])
@@ -1559,7 +1600,8 @@ else:
 
     st.markdown(render_export_area(paged_fixtures), unsafe_allow_html=True)
 
-with st.expander("Debug API response", expanded=False):
-    if api_error:
-        st.error(api_error)
-    st.json(raw_api_response)
+if not mobile_mode:
+    with st.expander("Debug API response", expanded=False):
+        if api_error:
+            st.error(api_error)
+        st.json(raw_api_response)
