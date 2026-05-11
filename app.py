@@ -50,7 +50,9 @@ NO_LIVE_ODDS_MESSAGE = (
 )
 USE_BROWSER_EXPORT = False
 SUBLAUNCH_URL = "https://sublaunch.com/fplcartel"
+LOGO_PATH = Path("assets/fpl-cartel-logo.png")
 LOGO_CANDIDATES = [
+    "assets/fpl-cartel-logo.png",
     "fpl-cartel-logo.png",
     "fpl_cartel_logo.png",
     "fpl-cartel.png",
@@ -107,6 +109,9 @@ view = query_params.get("view", "desktop")
 
 
 def find_logo_path():
+    if LOGO_PATH.exists():
+        return LOGO_PATH
+
     for name in LOGO_CANDIDATES:
         path = Path(name)
         if path.exists():
@@ -727,11 +732,11 @@ def mobile_styles():
             }
 
             .brand-logo {
-                width: 54px;
-                height: 54px;
-                border-radius: 14px;
+                width: 64px;
+                height: 64px;
+                border-radius: 16px;
                 object-fit: cover;
-                flex: 0 0 54px;
+                flex: 0 0 64px;
             }
 
             .brand-header h1 {
@@ -1037,11 +1042,11 @@ DESKTOP_STYLE = (
         }
 
         .brand-logo {
-            width: 72px;
-            height: 72px;
-            border-radius: 18px;
+            width: 90px;
+            height: 90px;
+            border-radius: 22px;
             object-fit: cover;
-            flex: 0 0 72px;
+            flex: 0 0 90px;
         }
 
         .brand-header h1 {
@@ -1349,10 +1354,10 @@ DESKTOP_STYLE = (
             }
 
             .brand-logo {
-                width: 54px;
-                height: 54px;
-                border-radius: 14px;
-                flex-basis: 54px;
+                width: 64px;
+                height: 64px;
+                border-radius: 16px;
+                flex-basis: 64px;
             }
 
             .brand-header h1 {
@@ -1962,10 +1967,10 @@ def build_export_image(fixtures_to_show, selected_round):
     footer_bold = load_font(18, bold=True)
     badge_font = load_font(15, bold=True)
 
-    logo = load_export_logo(72)
-    img.paste(logo, (LEFT_X, 35), logo)
+    logo = load_export_logo(90)
+    img.paste(logo, (LEFT_X, 28), logo)
 
-    header_text_x = LEFT_X + 90
+    header_text_x = LEFT_X + 112
     draw.text(
         (header_text_x, 38),
         "FPL Cartel World Cup Odds Dashboard",
