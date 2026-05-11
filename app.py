@@ -7,6 +7,7 @@ from io import BytesIO
 import pandas as pd
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from streamlit.errors import StreamlitSecretNotFoundError
 from PIL import Image, ImageDraw, ImageFont
 
@@ -284,6 +285,8 @@ st.markdown(
         .stApp {
             background: var(--app-bg);
             color: var(--ink);
+            max-width: 100%;
+            overflow-x: hidden;
         }
 
         .block-container {
@@ -559,13 +562,54 @@ st.markdown(
         }
 
         @media (max-width: 880px) {
+            html,
+            body,
+            [data-testid="stAppViewContainer"],
+            .stApp {
+                max-width: 100%;
+                overflow-x: hidden;
+            }
+
+            .block-container {
+                max-width: 100%;
+                padding-left: 0.75rem;
+                padding-right: 0.75rem;
+            }
+
             .title-section {
                 align-items: flex-start;
                 flex-direction: column;
+                gap: 0.85rem;
+                padding-top: 0.4rem;
+            }
+
+            .title-section h1 {
+                font-size: 1.75rem;
+            }
+
+            .title-section p {
+                font-size: 0.95rem;
             }
 
             .fixture-grid {
                 grid-template-columns: 1fr;
+                gap: 0.7rem;
+            }
+
+            .date-group {
+                margin-top: 1.1rem;
+            }
+
+            .date-heading {
+                font-size: 0.95rem;
+            }
+
+            .fixture-card {
+                box-shadow: 0 4px 10px rgba(22, 34, 51, 0.08);
+            }
+
+            .export-area {
+                padding-bottom: 18px;
             }
         }
 
@@ -579,23 +623,43 @@ st.markdown(
 
         @media (max-width: 520px) {
             .fixture-card {
-                grid-template-columns: 76px minmax(0, 1fr) 74px 74px;
+                grid-template-columns: 68px minmax(0, 1fr) 64px 64px;
+                border-radius: 8px;
             }
 
             .team-row {
-                padding: 0.65rem;
+                padding: 0.55rem;
             }
 
             .team-name {
-                font-size: 0.9rem;
+                font-size: 0.82rem;
             }
 
             .metric-head {
-                font-size: 0.6rem;
+                font-size: 0.54rem;
+                padding: 0.38rem 0.15rem;
             }
 
             .metric-cell {
-                font-size: 0.88rem;
+                font-size: 0.8rem;
+                padding: 0.55rem 0.2rem;
+            }
+
+            .date-block {
+                padding: 0.5rem 0.3rem;
+            }
+
+            .date-block strong,
+            .date-block span {
+                font-size: 0.68rem;
+            }
+
+            .team-flag,
+            .team-flag-fallback {
+                width: 24px;
+                height: 24px;
+                flex-basis: 24px;
+                font-size: 12px;
             }
         }
     </style>
@@ -604,8 +668,38 @@ st.markdown(
 )
 
 
+def detect_mobile_viewport():
+    components.html(
+        """
+        <script>
+        try {
+            const parentWindow = window.parent || window;
+            const width = parentWindow.innerWidth || window.innerWidth || 1200;
+            const nextViewport = width <= 700 ? "mobile" : "desktop";
+            const url = new URL(parentWindow.location.href);
+            if (url.searchParams.get("_viewport") !== nextViewport) {
+                url.searchParams.set("_viewport", nextViewport);
+                parentWindow.history.replaceState(null, "", url.toString());
+                parentWindow.location.reload();
+            }
+        } catch (error) {
+            // The responsive CSS still keeps the page usable if viewport detection is blocked.
+        }
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+    return st.query_params.get("_viewport") == "mobile"
+
+
+IS_MOBILE = detect_mobile_viewport()
+PAGE_SIZE = 6 if IS_MOBILE else 12
+
+
 @st.cache_data(ttl=300, show_spinner=False)
-def fetch_world_cup_odds(api_key):
+def fetch_world_cup_odds():
+    api_key = ODDS_API_KEY
     if not api_key or api_key == "your_api_key_here":
         return [], None, None
 
@@ -1019,6 +1113,20 @@ def draw_metric_cell(draw, box, text, class_name, font):
     draw_text_center(draw, box, text, font, hex_to_rgb(text_color))
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_flag_bytes(code):
+    if not code:
+        return None
+
+    try:
+        url = f"https://flagcdn.com/w40/{code}.png"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        return response.content
+    except requests.RequestException:
+        return None
+
+
 def load_flag_image(team):
     code = TEAM_FLAGS.get(team)
     if not code:
@@ -1028,10 +1136,10 @@ def load_flag_image(team):
         return _FLAG_CACHE[code]
 
     try:
-        url = f"https://flagcdn.com/w40/{code}.png"
-        response = requests.get(url, timeout=5)
-        response.raise_for_status()
-        flag = Image.open(BytesIO(response.content)).convert("RGBA")
+        flag_bytes = get_flag_bytes(code)
+        if not flag_bytes:
+            return None
+        flag = Image.open(BytesIO(flag_bytes)).convert("RGBA")
         flag = flag.resize((28, 28))
         _FLAG_CACHE[code] = flag
         return flag
@@ -1243,6 +1351,11 @@ def build_export_image(fixtures_to_show, selected_round):
     return output
 
 
+@st.cache_data(show_spinner=False)
+def build_export_image_bytes(fixtures_to_show, selected_round):
+    return build_export_image(fixtures_to_show, selected_round).getvalue()
+
+
 def render_team_flag(team_name):
     flag_url = get_flag_url(team_name)
     if not flag_url:
@@ -1250,6 +1363,7 @@ def render_team_flag(team_name):
     return (
         f'<img class="team-flag" src="{escape(flag_url)}" '
         f'alt="{escape(team_name)} flag" '
+        'loading="lazy" decoding="async" '
         'onerror="this.style.display=\'none\'; '
         'this.nextElementSibling.style.display=\'flex\';">'
         '<div class="team-flag-fallback" style="display:none;" '
@@ -1313,7 +1427,7 @@ def render_export_area(fixtures):
     )
 
 
-raw_api_response, api_error, _api_status_code = fetch_world_cup_odds(ODDS_API_KEY)
+raw_api_response, api_error, _api_status_code = fetch_world_cup_odds()
 live_fixtures = parse_odds_response(raw_api_response)
 using_live_data = not live_fixtures.empty
 
@@ -1377,16 +1491,32 @@ filtered = display_fixtures[display_fixtures["fixture_set"] == fixture_set]
 filtered = filtered[filtered["round"] == selected_round]
 
 with control_cols[2]:
-    image_bytes = build_export_image(filtered, selected_round)
-    st.download_button(
-        "Download image",
-        data=image_bytes,
-        file_name=(
-            "fpl-cartel-world-cup-odds-"
-            f"{selected_round.lower().replace(' ', '-')}-full.png"
-        ),
-        mime="image/png",
-    )
+    if not IS_MOBILE:
+        export_state_key = "export_image_state"
+        export_request_key = f"{fixture_set}|{selected_round}|{len(filtered)}"
+        cached_export = st.session_state.get(export_state_key, {})
+
+        if cached_export.get("request_key") != export_request_key:
+            st.session_state.pop(export_state_key, None)
+            cached_export = {}
+
+        if st.button("Download image", key="prepare_export_image"):
+            st.session_state[export_state_key] = {
+                "request_key": export_request_key,
+                "data": build_export_image_bytes(filtered, selected_round),
+            }
+            cached_export = st.session_state[export_state_key]
+
+        if cached_export.get("data"):
+            st.download_button(
+                "Save PNG",
+                data=cached_export["data"],
+                file_name=(
+                    "fpl-cartel-world-cup-odds-"
+                    f"{selected_round.lower().replace(' ', '-')}-full.png"
+                ),
+                mime="image/png",
+            )
 
 if filtered.empty:
     st.markdown(
@@ -1394,7 +1524,40 @@ if filtered.empty:
         unsafe_allow_html=True,
     )
 else:
-    st.markdown(render_export_area(filtered), unsafe_allow_html=True)
+    total_fixtures = len(filtered)
+    total_pages = max(1, math.ceil(total_fixtures / PAGE_SIZE))
+    page_key = f"fixture_page_{fixture_set}_{selected_round}_{PAGE_SIZE}"
+    page_key = page_key.replace(" ", "_").replace("/", "_")
+
+    if page_key not in st.session_state:
+        st.session_state[page_key] = 0
+
+    st.session_state[page_key] = min(st.session_state[page_key], total_pages - 1)
+    current_page = st.session_state[page_key]
+
+    page_start = current_page * PAGE_SIZE
+    page_end = min(page_start + PAGE_SIZE, total_fixtures)
+    paged_fixtures = filtered.iloc[page_start:page_end]
+
+    page_cols = st.columns([1, 1.4, 1])
+    with page_cols[0]:
+        if st.button("Previous", disabled=current_page == 0):
+            st.session_state[page_key] = max(0, current_page - 1)
+            st.rerun()
+    with page_cols[1]:
+        st.markdown(
+            (
+                f'<div class="empty-note">Showing fixtures {page_start + 1}-'
+                f'{page_end} of {total_fixtures}</div>'
+            ),
+            unsafe_allow_html=True,
+        )
+    with page_cols[2]:
+        if st.button("Next", disabled=current_page >= total_pages - 1):
+            st.session_state[page_key] = min(total_pages - 1, current_page + 1)
+            st.rerun()
+
+    st.markdown(render_export_area(paged_fixtures), unsafe_allow_html=True)
 
 with st.expander("Debug API response", expanded=False):
     if api_error:
