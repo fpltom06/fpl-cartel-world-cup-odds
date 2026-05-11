@@ -372,6 +372,84 @@ def mobile_format_cs(value):
     return f"{int(value)}%"
 
 
+MOBILE_FLAG_EMOJIS = {
+    "Mexico": "🇲🇽",
+    "South Africa": "🇿🇦",
+    "Argentina": "🇦🇷",
+    "England": "🏴",
+    "Japan": "🇯🇵",
+    "Brazil": "🇧🇷",
+    "France": "🇫🇷",
+    "Germany": "🇩🇪",
+    "Spain": "🇪🇸",
+    "Portugal": "🇵🇹",
+    "Netherlands": "🇳🇱",
+    "Italy": "🇮🇹",
+    "USA": "🇺🇸",
+    "United States": "🇺🇸",
+    "Canada": "🇨🇦",
+    "Morocco": "🇲🇦",
+    "Croatia": "🇭🇷",
+    "Belgium": "🇧🇪",
+    "Uruguay": "🇺🇾",
+    "Colombia": "🇨🇴",
+    "Australia": "🇦🇺",
+    "Denmark": "🇩🇰",
+    "Switzerland": "🇨🇭",
+    "Poland": "🇵🇱",
+    "Senegal": "🇸🇳",
+    "Ghana": "🇬🇭",
+    "Nigeria": "🇳🇬",
+    "Cameroon": "🇨🇲",
+    "Serbia": "🇷🇸",
+    "Saudi Arabia": "🇸🇦",
+    "South Korea": "🇰🇷",
+    "Korea Republic": "🇰🇷",
+    "Iran": "🇮🇷",
+    "IR Iran": "🇮🇷",
+    "Qatar": "🇶🇦",
+    "Jordan": "🇯🇴",
+    "Iraq": "🇮🇶",
+    "Cape Verde": "🇨🇻",
+    "Cabo Verde": "🇨🇻",
+    "Uzbekistan": "🇺🇿",
+    "Czech Republic": "🇨🇿",
+    "Bosnia & Herzegovina": "🇧🇦",
+}
+
+
+def mobile_team_flag(team_name):
+    return MOBILE_FLAG_EMOJIS.get(str(team_name).strip(), "⚽")
+
+
+def mobile_goal_cell_class(value):
+    if value is None or pd.isna(value):
+        return "empty"
+    if value >= 2.20:
+        return "dark-green"
+    if value >= 1.70:
+        return "green"
+    if value >= 1.30:
+        return "grey"
+    if value >= 1.00:
+        return "pink"
+    return "red"
+
+
+def mobile_cs_cell_class(value):
+    if value is None or pd.isna(value):
+        return "empty"
+    if value >= 45:
+        return "dark-green"
+    if value >= 32:
+        return "green"
+    if value >= 22:
+        return "grey"
+    if value >= 15:
+        return "red"
+    return "dark-red"
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_world_cup_odds_mobile():
     api_key = ODDS_API_KEY
@@ -417,6 +495,10 @@ def mobile_parse_odds_response(payload):
                 "Away": away_team,
                 "Away Goals": mobile_format_goals(away_goals),
                 "Away CS%": mobile_format_cs(away_cs),
+                "home_goals_value": home_goals,
+                "home_cs_value": home_cs,
+                "away_goals_value": away_goals,
+                "away_cs_value": away_cs,
                 "round": mobile_round_for_fixture(home_team, away_team, dt),
                 "commence_time_dt": dt,
             }
@@ -447,6 +529,10 @@ def mobile_sample_fixtures():
             "away_cs": "Away CS%",
         }
     )
+    rows["home_goals_value"] = rows["Home Goals"]
+    rows["home_cs_value"] = rows["Home CS%"]
+    rows["away_goals_value"] = rows["Away Goals"]
+    rows["away_cs_value"] = rows["Away CS%"]
     rows["Home Goals"] = rows["Home Goals"].apply(mobile_format_goals)
     rows["Away Goals"] = rows["Away Goals"].apply(mobile_format_goals)
     rows["Home CS%"] = rows["Home CS%"].apply(mobile_format_cs)
@@ -454,8 +540,227 @@ def mobile_sample_fixtures():
     return rows
 
 
+def render_mobile_card(row):
+    home = str(row["Home"])
+    away = str(row["Away"])
+    return (
+        '<article class="mobile-fixture-card">'
+        '<div class="mobile-date">'
+        f'<strong>{escape(str(row["Date"]))}</strong>'
+        f'<span>{escape(str(row["Time"]))}</span>'
+        "</div>"
+        '<div class="mobile-teams">'
+        '<div class="mobile-team-row">'
+        f'<span class="mobile-flag">{mobile_team_flag(home)}</span>'
+        f'<span class="mobile-team-name">{escape(home)}</span>'
+        "</div>"
+        '<div class="mobile-team-row">'
+        f'<span class="mobile-flag">{mobile_team_flag(away)}</span>'
+        f'<span class="mobile-team-name">{escape(away)}</span>'
+        "</div>"
+        "</div>"
+        '<div class="mobile-metric-col">'
+        '<div class="mobile-metric-head">PROJ</div>'
+        f'<div class="mobile-metric {mobile_goal_cell_class(row["home_goals_value"])}">{escape(str(row["Home Goals"]))}</div>'
+        f'<div class="mobile-metric {mobile_goal_cell_class(row["away_goals_value"])}">{escape(str(row["Away Goals"]))}</div>'
+        "</div>"
+        '<div class="mobile-metric-col">'
+        '<div class="mobile-metric-head">CS %</div>'
+        f'<div class="mobile-metric {mobile_cs_cell_class(row["home_cs_value"])}">{escape(str(row["Home CS%"]))}</div>'
+        f'<div class="mobile-metric {mobile_cs_cell_class(row["away_cs_value"])}">{escape(str(row["Away CS%"]))}</div>'
+        "</div>"
+        "</article>"
+    )
+
+
+def render_mobile_cards(fixtures):
+    cards = "\n".join(render_mobile_card(row) for row in fixtures.to_dict("records"))
+    return f'<section class="mobile-card-list">{cards}</section>'
+
+
 def render_mobile_app():
-    st.title("FPL Cartel World Cup Odds")
+    st.markdown(
+        """
+        <style>
+            .stApp {
+                background: #eef1f4;
+                color: #17202a;
+            }
+
+            .block-container {
+                max-width: 460px;
+                padding: 0.75rem 0.65rem 2rem;
+            }
+
+            .mobile-title {
+                max-width: 430px;
+                margin: 0 auto 0.85rem;
+            }
+
+            .mobile-title h1 {
+                margin: 0;
+                font-size: 1.7rem;
+                line-height: 1.05;
+                color: #17202a;
+                letter-spacing: 0;
+            }
+
+            .mobile-title p {
+                margin: 0.4rem 0 0;
+                color: #687380;
+                font-size: 0.9rem;
+            }
+
+            .mobile-card-list {
+                display: grid;
+                grid-template-columns: 1fr;
+                gap: 0.72rem;
+                max-width: 430px;
+                margin: 0.8rem auto 0;
+            }
+
+            .mobile-fixture-card {
+                display: grid;
+                grid-template-columns: 70px minmax(0, 1fr) 58px 58px;
+                background: #ffffff;
+                border: 1px solid #d8dee8;
+                border-radius: 10px;
+                overflow: hidden;
+                box-shadow: 0 2px 6px rgba(23, 32, 42, 0.06);
+            }
+
+            .mobile-date {
+                background: #f5f7fa;
+                border-right: 1px solid #d8dee8;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                padding: 0.45rem 0.28rem;
+                gap: 0.14rem;
+            }
+
+            .mobile-date strong,
+            .mobile-date span {
+                font-size: 0.7rem;
+                line-height: 1.1;
+            }
+
+            .mobile-date span {
+                color: #687380;
+                font-weight: 750;
+            }
+
+            .mobile-teams {
+                display: grid;
+                grid-template-rows: 1fr 1fr;
+                padding-top: 28px;
+                min-width: 0;
+            }
+
+            .mobile-team-row {
+                min-height: 41px;
+                display: flex;
+                align-items: center;
+                gap: 0.45rem;
+                padding: 0.45rem 0.55rem;
+                border-bottom: 1px solid #d8dee8;
+                min-width: 0;
+            }
+
+            .mobile-team-row:last-child {
+                border-bottom: 0;
+            }
+
+            .mobile-flag {
+                width: 22px;
+                flex: 0 0 22px;
+                text-align: center;
+                font-size: 17px;
+                line-height: 1;
+            }
+
+            .mobile-team-name {
+                font-size: 0.88rem;
+                font-weight: 850;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .mobile-metric-col {
+                display: grid;
+                grid-template-rows: 28px 1fr 1fr;
+                border-left: 1px solid #d8dee8;
+            }
+
+            .mobile-metric-head {
+                min-height: 28px;
+                background: #f5f7fa;
+                border-bottom: 1px solid #d8dee8;
+                display: grid;
+                place-items: center;
+                color: #687380;
+                font-size: 0.6rem;
+                font-weight: 850;
+            }
+
+            .mobile-metric {
+                min-height: 41px;
+                display: grid;
+                place-items: center;
+                border-bottom: 1px solid #d8dee8;
+                font-size: 0.84rem;
+                font-weight: 850;
+            }
+
+            .mobile-metric:last-child {
+                border-bottom: 0;
+            }
+
+            .dark-green {
+                background: #28531d;
+                color: #ffffff;
+            }
+
+            .green {
+                background: #00e676;
+                color: #064e3b;
+            }
+
+            .grey {
+                background: #dedede;
+                color: #263238;
+            }
+
+            .pink {
+                background: #ffe6e6;
+                color: #b91c1c;
+            }
+
+            .red {
+                background: #ff0f4f;
+                color: #ffffff;
+            }
+
+            .dark-red {
+                background: #8b002f;
+                color: #ffffff;
+            }
+
+            .empty {
+                background: #f1f5f9;
+                color: #64748b;
+            }
+        </style>
+        <section class="mobile-title">
+            <h1>FPL Cartel World Cup Odds Dashboard</h1>
+            <p>Projected goals and model-estimated clean sheet percentages.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
 
     live_fixtures = mobile_parse_odds_response(fetch_world_cup_odds_mobile())
     fixtures = live_fixtures if not live_fixtures.empty else mobile_sample_fixtures()
@@ -474,21 +779,8 @@ def render_mobile_app():
     page_number = page_options.index(selected_page) + 1
     start = (page_number - 1) * page_size
     end = start + page_size
-
-    mobile_df = fixtures_to_show.iloc[start:end][
-        [
-            "Date",
-            "Time",
-            "Home",
-            "Home Goals",
-            "Home CS%",
-            "Away",
-            "Away Goals",
-            "Away CS%",
-        ]
-    ]
-
-    st.dataframe(mobile_df, use_container_width=True, hide_index=True)
+    fixtures_page = fixtures_to_show.iloc[start:end]
+    st.markdown(render_mobile_cards(fixtures_page), unsafe_allow_html=True)
 
 
 if view == "mobile":
@@ -1633,54 +1925,34 @@ using_live_data = not live_fixtures.empty
 
 status_text = "Live odds via The Odds API" if using_live_data else "Sample fallback data"
 display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
-mobile_mode = st.toggle("Mobile mode", value=False)
-
-if mobile_mode:
-    st.title("FPL Cartel World Cup Odds Dashboard")
-    st.caption("Projected goals and model-estimated clean sheet percentages by round.")
-    st.caption(status_text)
-else:
-    st.markdown(
-        f"""
-        <section class="title-section">
-            <div>
-                <h1>FPL Cartel World Cup Odds Dashboard</h1>
-                <p>Projected goals and model-estimated clean sheet percentages by round.</p>
-            </div>
-            <div class="status-chip">{status_text}</div>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
+st.markdown(
+    f"""
+    <section class="title-section">
+        <div>
+            <h1>FPL Cartel World Cup Odds Dashboard</h1>
+            <p>Projected goals and model-estimated clean sheet percentages by round.</p>
+        </div>
+        <div class="status-chip">{status_text}</div>
+    </section>
+    """,
+    unsafe_allow_html=True,
+)
 
 if api_error:
     st.warning(f"Could not fetch live odds from The Odds API: {api_error}")
 
 if not using_live_data:
-    if mobile_mode:
-        st.info(NO_LIVE_ODDS_MESSAGE)
-    else:
-        st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
-
-if mobile_mode:
-    st.warning("Mobile mode uses a lighter layout for stability.")
+    st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
 
 fixture_options = display_fixtures["fixture_set"].drop_duplicates().tolist()
+control_cols = st.columns([1.2, 1.1, 1.2])
 
-if mobile_mode:
+with control_cols[0]:
     fixture_set = st.segmented_control(
         "Fixture set",
         fixture_options,
         default=fixture_options[0],
     )
-else:
-    control_cols = st.columns([1.2, 1.1, 1.2])
-    with control_cols[0]:
-        fixture_set = st.segmented_control(
-            "Fixture set",
-            fixture_options,
-            default=fixture_options[0],
-        )
 
 available_rounds = (
     display_fixtures.loc[display_fixtures["fixture_set"] == fixture_set, "round"]
@@ -1699,99 +1971,48 @@ default_round_index = (
     else 0
 )
 
-if mobile_mode:
+with control_cols[1]:
     selected_round = st.selectbox(
         "Round",
         round_options,
         index=default_round_index,
     )
-else:
-    with control_cols[1]:
-        selected_round = st.selectbox(
-            "Round",
-            round_options,
-            index=default_round_index,
-        )
 
 filtered = display_fixtures[display_fixtures["fixture_set"] == fixture_set]
 filtered = filtered[filtered["round"] == selected_round]
 
-if not mobile_mode:
-    with control_cols[2]:
-        export_state_key = "export_image_state"
-        export_request_key = f"{fixture_set}|{selected_round}|{len(filtered)}"
-        cached_export = st.session_state.get(export_state_key, {})
+with control_cols[2]:
+    export_state_key = "export_image_state"
+    export_request_key = f"{fixture_set}|{selected_round}|{len(filtered)}"
+    cached_export = st.session_state.get(export_state_key, {})
 
-        if cached_export.get("request_key") != export_request_key:
-            st.session_state.pop(export_state_key, None)
-            cached_export = {}
+    if cached_export.get("request_key") != export_request_key:
+        st.session_state.pop(export_state_key, None)
+        cached_export = {}
 
-        if st.button("Download image", key="prepare_export_image"):
-            st.session_state[export_state_key] = {
-                "request_key": export_request_key,
-                "data": build_export_image_bytes(filtered, selected_round),
-            }
-            cached_export = st.session_state[export_state_key]
+    if st.button("Download image", key="prepare_export_image"):
+        st.session_state[export_state_key] = {
+            "request_key": export_request_key,
+            "data": build_export_image_bytes(filtered, selected_round),
+        }
+        cached_export = st.session_state[export_state_key]
 
-        if cached_export.get("data"):
-            st.download_button(
-                "Save PNG",
-                data=cached_export["data"],
-                file_name=(
-                    "fpl-cartel-world-cup-odds-"
-                    f"{selected_round.lower().replace(' ', '-')}-full.png"
-                ),
-                mime="image/png",
-            )
+    if cached_export.get("data"):
+        st.download_button(
+            "Save PNG",
+            data=cached_export["data"],
+            file_name=(
+                "fpl-cartel-world-cup-odds-"
+                f"{selected_round.lower().replace(' ', '-')}-full.png"
+            ),
+            mime="image/png",
+        )
 
 if filtered.empty:
-    if mobile_mode:
-        st.info("No fixtures available for this selection.")
-    else:
-        st.markdown(
-            '<div class="empty-note">No fixtures available for this selection.</div>',
-            unsafe_allow_html=True,
-        )
-elif mobile_mode:
-    page_size = 5
-    total_fixtures = len(filtered)
-    max_pages = max(1, math.ceil(total_fixtures / page_size))
-    page = st.number_input("Page", min_value=1, max_value=max_pages, value=1)
-    start = (page - 1) * page_size
-    end = min(start + page_size, total_fixtures)
-    fixtures_page = filtered.iloc[start:end]
-
-    mobile_table = fixtures_page[
-        [
-            "date",
-            "kickoff",
-            "home_team",
-            "home_xg",
-            "home_cs",
-            "away_team",
-            "away_xg",
-            "away_cs",
-        ]
-    ].copy()
-    mobile_table["home_xg"] = mobile_table["home_xg"].apply(format_projected_goals)
-    mobile_table["away_xg"] = mobile_table["away_xg"].apply(format_projected_goals)
-    mobile_table["home_cs"] = mobile_table["home_cs"].apply(format_clean_sheet)
-    mobile_table["away_cs"] = mobile_table["away_cs"].apply(format_clean_sheet)
-    mobile_table = mobile_table.rename(
-        columns={
-            "date": "Date",
-            "kickoff": "Time",
-            "home_team": "Home",
-            "home_xg": "Home Proj",
-            "home_cs": "Home CS%",
-            "away_team": "Away",
-            "away_xg": "Away Proj",
-            "away_cs": "Away CS%",
-        }
+    st.markdown(
+        '<div class="empty-note">No fixtures available for this selection.</div>',
+        unsafe_allow_html=True,
     )
-
-    st.caption(f"Showing fixtures {start + 1}-{end} of {total_fixtures}")
-    st.dataframe(mobile_table, hide_index=True, use_container_width=True)
 else:
     total_fixtures = len(filtered)
     page_size = 12
@@ -1829,8 +2050,7 @@ else:
 
     st.markdown(render_export_area(paged_fixtures), unsafe_allow_html=True)
 
-if not mobile_mode:
-    with st.expander("Debug API response", expanded=False):
-        if api_error:
-            st.error(api_error)
-        st.json(raw_api_response)
+with st.expander("Debug API response", expanded=False):
+    if api_error:
+        st.error(api_error)
+    st.json(raw_api_response)
