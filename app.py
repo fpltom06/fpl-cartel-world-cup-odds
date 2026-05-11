@@ -1707,13 +1707,13 @@ def draw_flag_badge(img, draw, team, x, y, font):
 
 def build_export_image(fixtures_to_show, selected_round):
     EXPORT_W = 1920
-    BASE_H = 1080
+    EXPORT_H = 1080
     MARGIN_X = 60
-    START_Y = 145
+    START_Y = 155
     CARD_W = 850
-    CARD_H = 110
+    CARD_H = 135
     GAP_X = 70
-    GAP_Y = 14
+    GAP_Y = 18
     FOOTER_GAP = 55
     FOOTER_H = 70
     CARD_RADIUS = 12
@@ -1723,24 +1723,24 @@ def build_export_image(fixtures_to_show, selected_round):
     TEAM_W = 435
     PROJ_W = 145
     CS_W = 155
-    HEADER_H = 28
-    ROW_H = 41
+    HEADER_H = 35
+    ROW_H = 50
+    FOOTER_DIVIDER_Y = 990
+    FOOTER_TEXT_Y = 1020
 
     bg = "#f3f6f9"
     fixture_count = len(fixtures_to_show)
-    rows_needed = math.ceil(fixture_count / 2) if fixture_count else 0
-    content_h = START_Y + rows_needed * (CARD_H + GAP_Y)
-    EXPORT_H = max(BASE_H, content_h + FOOTER_GAP + FOOTER_H)
 
     img = Image.new("RGB", (EXPORT_W, EXPORT_H), hex_to_rgb(bg))
     draw = ImageDraw.Draw(img)
 
-    title_font = load_font(44, bold=True)
+    title_font = load_font(46, bold=True)
     subtitle_font = load_font(24)
-    team_font = load_font(22, bold=True)
-    small_font = load_font(17)
-    metric_head_font = load_font(15, bold=True)
-    metric_font = load_font(26, bold=True)
+    team_font = load_font(24, bold=True)
+    small_font = load_font(18)
+    time_font = load_font(17)
+    metric_head_font = load_font(16, bold=True)
+    metric_font = load_font(30, bold=True)
     footer_font = load_font(18)
     footer_bold = load_font(18, bold=True)
     badge_font = load_font(15, bold=True)
@@ -1769,8 +1769,11 @@ def build_export_image(fixtures_to_show, selected_round):
     max_card_bottom = START_Y
 
     for index, row in enumerate(fixtures_to_show.itertuples(index=False)):
-        col = index % 2
-        row_position = index // 2
+        if index >= 10:
+            break
+
+        col = 0 if index < 5 else 1
+        row_position = index if index < 5 else index - 5
 
         x = left_x if col == 0 else right_x
         y = START_Y + row_position * (CARD_H + GAP_Y)
@@ -1834,25 +1837,25 @@ def build_export_image(fixtures_to_show, selected_round):
 
         draw_text_center(
             draw,
-            (date_x + 8, y + 16, team_x - 8, y + 58),
+            (date_x + 8, y + 22, team_x - 8, y + 68),
             str(row.date),
             small_font,
             hex_to_rgb("#111827"),
         )
         draw_text_center(
             draw,
-            (date_x + 8, y + 58, team_x - 8, y + 98),
+            (date_x + 8, y + 68, team_x - 8, y + 112),
             str(row.kickoff),
-            small_font,
+            time_font,
             hex_to_rgb("#4b5563"),
         )
 
         home_row_y = y + HEADER_H
         away_row_y = y + HEADER_H + ROW_H
-        draw_flag_badge(img, draw, row.home_team, team_x + 18, home_row_y + 7, badge_font)
-        draw_flag_badge(img, draw, row.away_team, team_x + 18, away_row_y + 7, badge_font)
-        draw.text((team_x + 58, home_row_y + 10), str(row.home_team), font=team_font, fill=hex_to_rgb("#111827"))
-        draw.text((team_x + 58, away_row_y + 10), str(row.away_team), font=team_font, fill=hex_to_rgb("#111827"))
+        draw_flag_badge(img, draw, row.home_team, team_x + 18, home_row_y + 11, badge_font)
+        draw_flag_badge(img, draw, row.away_team, team_x + 18, away_row_y + 11, badge_font)
+        draw.text((team_x + 58, home_row_y + 13), str(row.home_team), font=team_font, fill=hex_to_rgb("#111827"))
+        draw.text((team_x + 58, away_row_y + 13), str(row.away_team), font=team_font, fill=hex_to_rgb("#111827"))
 
         draw_text_center(draw, (proj_x, y, cs_x, y + HEADER_H), "PROJ", metric_head_font, hex_to_rgb("#4b5563"))
         draw_text_center(draw, (cs_x, y, card_right_x, y + HEADER_H), "CS %", metric_head_font, hex_to_rgb("#4b5563"))
@@ -1864,16 +1867,11 @@ def build_export_image(fixtures_to_show, selected_round):
             width=2,
         )
 
-    max_card_bottom = START_Y + rows_needed * (CARD_H + GAP_Y)
-    footer_y = max_card_bottom + 35
-    divider_y = footer_y - 22
-    footer_text_y = footer_y + 10
-
-    draw.line((MARGIN_X, divider_y, EXPORT_W - MARGIN_X, divider_y), fill=hex_to_rgb("#d1d5db"), width=2)
-    draw.text((MARGIN_X, footer_text_y), "Graphics by ", font=footer_font, fill=hex_to_rgb("#111827"))
+    draw.line((MARGIN_X, FOOTER_DIVIDER_Y, EXPORT_W - MARGIN_X, FOOTER_DIVIDER_Y), fill=hex_to_rgb("#d1d5db"), width=2)
+    draw.text((MARGIN_X, FOOTER_TEXT_Y), "Graphics by ", font=footer_font, fill=hex_to_rgb("#111827"))
     graphics_prefix_width = draw.textlength("Graphics by ", font=footer_font)
     draw.text(
-        (MARGIN_X + graphics_prefix_width, footer_text_y),
+        (MARGIN_X + graphics_prefix_width, FOOTER_TEXT_Y),
         "FPL Cartel",
         font=footer_bold,
         fill=hex_to_rgb("#111827"),
@@ -1881,7 +1879,7 @@ def build_export_image(fixtures_to_show, selected_round):
     source_text = "Source: live odds via The Odds API"
     source_width = draw.textlength(source_text, font=footer_font)
     draw.text(
-        (EXPORT_W - MARGIN_X - source_width, footer_text_y),
+        (EXPORT_W - MARGIN_X - source_width, FOOTER_TEXT_Y),
         source_text,
         font=footer_font,
         fill=hex_to_rgb("#111827"),
@@ -2040,7 +2038,7 @@ def render_desktop_dashboard():
     filtered = filtered[filtered["round"] == selected_round]
 
     with control_cols[2]:
-        export_page_size = 12
+        export_page_size = 10
         total_export_pages = max(1, math.ceil(len(filtered) / export_page_size))
         export_page_options = [
             f"Export page {page_number}"
