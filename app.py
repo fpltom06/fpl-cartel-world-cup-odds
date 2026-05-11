@@ -597,7 +597,7 @@ def render_mobile_app():
 
             .block-container {
                 max-width: 460px;
-                padding: 0.75rem 0.65rem 2rem;
+                padding: 0.5rem 0.65rem 2rem;
             }
 
             .mobile-title {
@@ -761,6 +761,36 @@ def render_mobile_app():
             .empty {
                 background: #f1f5f9;
                 color: #64748b;
+            }
+
+            @media (max-width: 768px) {
+                header[data-testid="stHeader"] {
+                    display: none !important;
+                }
+
+                .stAppToolbar {
+                    display: none !important;
+                }
+
+                .stDeployButton {
+                    display: none !important;
+                }
+
+                div[data-testid="stToolbar"] {
+                    display: none !important;
+                }
+
+                #MainMenu {
+                    display: none !important;
+                }
+
+                footer {
+                    display: none !important;
+                }
+
+                .block-container {
+                    padding-top: 0.5rem !important;
+                }
             }
         </style>
         <section class="mobile-title">
