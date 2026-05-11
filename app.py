@@ -1,8 +1,11 @@
 import os
 import math
+import base64
+import mimetypes
 from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
+from pathlib import Path
 
 import pandas as pd
 import requests
@@ -46,6 +49,16 @@ NO_LIVE_ODDS_MESSAGE = (
     "are too far away or markets are not open."
 )
 USE_BROWSER_EXPORT = False
+SUBLAUNCH_URL = "https://sublaunch.com/fplcartel"
+LOGO_CANDIDATES = [
+    "fpl-cartel-logo.png",
+    "fpl_cartel_logo.png",
+    "fpl-cartel.png",
+    "fplcartel.png",
+    "logo.png",
+    "cartel-logo.png",
+    "FPL Cartel Logo.png",
+]
 
 st.set_page_config(
     page_title="FPL Cartel World Cup Odds Dashboard",
@@ -91,6 +104,54 @@ st.markdown(
 
 query_params = st.query_params
 view = query_params.get("view", "desktop")
+
+
+def find_logo_path():
+    for name in LOGO_CANDIDATES:
+        path = Path(name)
+        if path.exists():
+            return path
+    return None
+
+
+def fallback_logo_svg():
+    svg = """
+    <svg xmlns="http://www.w3.org/2000/svg" width="144" height="144" viewBox="0 0 144 144">
+      <rect width="144" height="144" rx="30" fill="#111827"/>
+      <circle cx="72" cy="72" r="50" fill="#00e676"/>
+      <text x="72" y="66" text-anchor="middle" font-family="Arial, sans-serif" font-size="34" font-weight="900" fill="#111827">FPL</text>
+      <text x="72" y="96" text-anchor="middle" font-family="Arial, sans-serif" font-size="24" font-weight="900" fill="#111827">CARTEL</text>
+    </svg>
+    """
+    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f"data:image/svg+xml;base64,{encoded}"
+
+
+def get_logo_src():
+    logo_path = find_logo_path()
+    if not logo_path:
+        return fallback_logo_svg()
+
+    mime_type, _encoding = mimetypes.guess_type(str(logo_path))
+    if not mime_type:
+        mime_type = "image/png"
+    data = base64.b64encode(logo_path.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{data}"
+
+
+def render_brand_header():
+    logo_src = get_logo_src()
+    return f"""
+    <div class="brand-header">
+      <img src="{logo_src}" class="brand-logo" alt="FPL Cartel logo">
+      <div>
+        <h1>FPL Cartel World Cup Odds Dashboard</h1>
+        <a href="{SUBLAUNCH_URL}" target="_blank" rel="noopener noreferrer">
+          Join FPL Cartel on Sublaunch
+        </a>
+      </div>
+    </div>
+    """
 
 
 SAMPLE_FIXTURES = pd.DataFrame(
@@ -657,6 +718,43 @@ def mobile_styles():
                 font-size: 0.9rem;
             }
 
+            .brand-header {
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                max-width: 430px;
+                margin: 0 auto 18px;
+            }
+
+            .brand-logo {
+                width: 54px;
+                height: 54px;
+                border-radius: 14px;
+                object-fit: cover;
+                flex: 0 0 54px;
+            }
+
+            .brand-header h1 {
+                margin: 0;
+                font-size: 25px;
+                line-height: 1.05;
+                color: #111827;
+                letter-spacing: 0;
+                font-weight: 900;
+            }
+
+            .brand-header a {
+                display: inline-block;
+                margin-top: 8px;
+                color: #64748b;
+                font-size: 13px;
+                text-decoration: none;
+            }
+
+            .brand-header a:hover {
+                text-decoration: underline;
+            }
+
             .mobile-card-list {
                 display: grid;
                 grid-template-columns: 1fr;
@@ -839,12 +937,7 @@ def mobile_styles():
 def render_mobile_dashboard():
     mobile_styles()
     st.markdown(
-        """
-        <section class="mobile-title">
-            <h1>FPL Cartel World Cup Odds Dashboard</h1>
-            <p>Live odds via The Odds API</p>
-        </section>
-        """,
+        render_brand_header(),
         unsafe_allow_html=True,
     )
 
@@ -934,6 +1027,42 @@ DESKTOP_STYLE = (
             font-size: 0.9rem;
             white-space: nowrap;
             box-shadow: 0 8px 18px rgba(23, 32, 42, 0.06);
+        }
+
+        .brand-header {
+            display: flex;
+            align-items: center;
+            gap: 18px;
+            margin-bottom: 22px;
+        }
+
+        .brand-logo {
+            width: 72px;
+            height: 72px;
+            border-radius: 18px;
+            object-fit: cover;
+            flex: 0 0 72px;
+        }
+
+        .brand-header h1 {
+            margin: 0;
+            font-size: 44px;
+            line-height: 1.05;
+            color: #111827;
+            letter-spacing: 0;
+            font-weight: 900;
+        }
+
+        .brand-header a {
+            display: inline-block;
+            margin-top: 8px;
+            color: #64748b;
+            font-size: 15px;
+            text-decoration: none;
+        }
+
+        .brand-header a:hover {
+            text-decoration: underline;
         }
 
         div[data-testid="stHorizontalBlock"] {
@@ -1212,6 +1341,26 @@ DESKTOP_STYLE = (
 
             .export-area {
                 padding-bottom: 18px;
+            }
+
+            .brand-header {
+                gap: 12px;
+                margin-bottom: 18px;
+            }
+
+            .brand-logo {
+                width: 54px;
+                height: 54px;
+                border-radius: 14px;
+                flex-basis: 54px;
+            }
+
+            .brand-header h1 {
+                font-size: 25px;
+            }
+
+            .brand-header a {
+                font-size: 13px;
             }
         }
 
@@ -1741,6 +1890,38 @@ def draw_flag_badge(img, draw, team, x, y, font):
     )
 
 
+def load_export_logo(size):
+    logo_path = find_logo_path()
+    if logo_path:
+        try:
+            logo = Image.open(logo_path).convert("RGBA")
+        except Exception:
+            logo = None
+    else:
+        logo = None
+
+    if logo is None:
+        logo = Image.new("RGBA", (size, size), (17, 24, 39, 255))
+        logo_draw = ImageDraw.Draw(logo)
+        logo_draw.ellipse((11, 11, size - 11, size - 11), fill=hex_to_rgb("#00e676"))
+        logo_draw.text(
+            (size / 2, size / 2 - 8),
+            "FC",
+            anchor="mm",
+            font=load_font(max(18, size // 3), bold=True),
+            fill=hex_to_rgb("#111827"),
+        )
+    else:
+        logo = logo.resize((size, size))
+
+    mask = Image.new("L", (size, size), 0)
+    mask_draw = ImageDraw.Draw(mask)
+    mask_draw.rounded_rectangle((0, 0, size, size), radius=max(12, size // 4), fill=255)
+    output = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    output.paste(logo, (0, 0), mask)
+    return output
+
+
 def build_export_image(fixtures_to_show, selected_round):
     EXPORT_W = 1920
     EXPORT_H = 1080
@@ -1771,6 +1952,7 @@ def build_export_image(fixtures_to_show, selected_round):
 
     title_font = load_font(48, bold=True)
     subtitle_font = load_font(24)
+    link_font = load_font(17)
     date_font = load_font(18, bold=True)
     time_font = load_font(17)
     team_font = load_font(25, bold=True)
@@ -1780,14 +1962,24 @@ def build_export_image(fixtures_to_show, selected_round):
     footer_bold = load_font(18, bold=True)
     badge_font = load_font(15, bold=True)
 
+    logo = load_export_logo(72)
+    img.paste(logo, (LEFT_X, 35), logo)
+
+    header_text_x = LEFT_X + 90
     draw.text(
-        (LEFT_X, 35),
+        (header_text_x, 38),
         "FPL Cartel World Cup Odds Dashboard",
         font=title_font,
         fill=hex_to_rgb("#111827"),
     )
     draw.text(
-        (LEFT_X, 92),
+        (header_text_x, 92),
+        "Join FPL Cartel on Sublaunch",
+        font=link_font,
+        fill=hex_to_rgb("#64748b"),
+    )
+    draw.text(
+        (LEFT_X, 116),
         f"{selected_round} - Projected goals and clean sheet odds",
         font=subtitle_font,
         fill=hex_to_rgb("#4b5563"),
@@ -2332,18 +2524,7 @@ def render_desktop_dashboard():
 
     status_text = "Live odds via The Odds API" if using_live_data else "Sample fallback data"
     display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
-    st.markdown(
-        f"""
-        <section class="title-section">
-            <div>
-                <h1>FPL Cartel World Cup Odds Dashboard</h1>
-                <p>Projected goals and model-estimated clean sheet percentages by round.</p>
-            </div>
-            <div class="status-chip">{status_text}</div>
-        </section>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.markdown(render_brand_header(), unsafe_allow_html=True)
 
     if api_error:
         st.warning(f"Could not fetch live odds from The Odds API: {api_error}")
