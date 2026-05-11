@@ -795,7 +795,7 @@ def render_mobile_app():
         </style>
         <section class="mobile-title">
             <h1>FPL Cartel World Cup Odds Dashboard</h1>
-            <p>Projected goals and model-estimated clean sheet percentages.</p>
+            <p>Live odds via The Odds API</p>
         </section>
         """,
         unsafe_allow_html=True,
