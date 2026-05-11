@@ -9,7 +9,6 @@ import requests
 import streamlit as st
 from streamlit.errors import StreamlitSecretNotFoundError
 from PIL import Image, ImageDraw, ImageFont
-from playwright.sync_api import sync_playwright
 
 try:
     from dotenv import load_dotenv
@@ -46,6 +45,7 @@ NO_LIVE_ODDS_MESSAGE = (
     "No World Cup betting odds available yet. This usually happens when fixtures "
     "are too far away or markets are not open."
 )
+USE_BROWSER_EXPORT = False
 
 st.set_page_config(
     page_title="FPL Cartel World Cup Odds Dashboard",
@@ -1789,7 +1789,12 @@ def build_export_image(fixtures_to_show, selected_round):
         metric_right = x + CARD_W - BORDER - INNER_PAD
         metric_bottom = y + CARD_H - BORDER - INNER_PAD
 
-        # Draw full card first, then square metric cells, then redraw the border last.
+        # Draw shadow, full card, square metric cells, then redraw the border last.
+        draw.rounded_rectangle(
+            (x + 5, y + 7, card_right_x + 5, y + CARD_H + 7),
+            radius=CARD_RADIUS,
+            fill=hex_to_rgb("#e3e9ef"),
+        )
         draw.rounded_rectangle(
             (x, y, card_right_x, y + CARD_H),
             radius=CARD_RADIUS,
@@ -1893,24 +1898,25 @@ def build_export_image(fixtures_to_show, selected_round):
 
 
 def build_export_image_bytes(fixtures_to_show, selected_round, export_page, total_export_pages):
-    try:
+    if USE_BROWSER_EXPORT:
         return build_export_with_playwright(
             fixtures_to_show,
             selected_round,
             export_page,
             total_export_pages,
         ).getvalue()
-    except Exception:
-        st.warning("Browser export failed. Using fallback image export.")
-        return build_export_with_pil(
-            fixtures_to_show,
-            selected_round,
-            export_page,
-            total_export_pages,
-        ).getvalue()
+
+    return build_export_with_pil(
+        fixtures_to_show,
+        selected_round,
+        export_page,
+        total_export_pages,
+    ).getvalue()
 
 
 def build_export_with_playwright(fixtures_to_show, selected_round, export_page, total_export_pages):
+    from playwright.sync_api import sync_playwright
+
     html = build_export_html(fixtures_to_show, selected_round, export_page, total_export_pages)
 
     with sync_playwright() as p:
@@ -1928,11 +1934,9 @@ def build_export_with_playwright(fixtures_to_show, selected_round, export_page, 
 
 
 def build_export_with_pil(fixtures_to_show, selected_round, export_page, total_export_pages):
-    export_title = (
-        selected_round
-        if total_export_pages <= 1
-        else f"{selected_round} · Page {export_page} of {total_export_pages}"
-    )
+    export_title = selected_round
+    if total_export_pages > 1:
+        export_title = f"{selected_round} - Page {export_page} of {total_export_pages}"
     return build_export_image(fixtures_to_show, export_title)
 
 
@@ -2385,39 +2389,21 @@ def render_desktop_dashboard():
         export_start = (selected_export_page - 1) * export_page_size
         export_end = export_start + export_page_size
         export_fixtures = filtered.iloc[export_start:export_end]
-        export_state_key = "export_image_state"
-        export_request_key = (
-            f"{fixture_set}|{selected_round}|{len(filtered)}|{selected_export_page}"
+        st.download_button(
+            "Download image",
+            data=build_export_image_bytes(
+                export_fixtures,
+                selected_round,
+                selected_export_page,
+                total_export_pages,
+            ),
+            file_name=(
+                "fpl-cartel-world-cup-odds-"
+                f"{selected_round.lower().replace(' ', '-')}-"
+                f"page-{selected_export_page}.png"
+            ),
+            mime="image/png",
         )
-        cached_export = st.session_state.get(export_state_key, {})
-
-        if cached_export.get("request_key") != export_request_key:
-            st.session_state.pop(export_state_key, None)
-            cached_export = {}
-
-        if st.button("Download image", key="prepare_export_image"):
-            st.session_state[export_state_key] = {
-                "request_key": export_request_key,
-                "data": build_export_image_bytes(
-                    export_fixtures,
-                    selected_round,
-                    selected_export_page,
-                    total_export_pages,
-                ),
-            }
-            cached_export = st.session_state[export_state_key]
-
-        if cached_export.get("data"):
-            st.download_button(
-                "Save PNG",
-                data=cached_export["data"],
-                file_name=(
-                    "fpl-cartel-world-cup-odds-"
-                    f"{selected_round.lower().replace(' ', '-')}-"
-                    f"page-{selected_export_page}.png"
-                ),
-                mime="image/png",
-            )
 
     if filtered.empty:
         st.markdown(
