@@ -1705,36 +1705,35 @@ def draw_flag_badge(img, draw, team, x, y, font):
     )
 
 
-def build_export_image(fixtures_to_show, selected_round):
+def build_export_image(fixtures_to_show, selected_round, export_page=1, total_export_pages=1):
     EXPORT_W = 1920
-    BASE_H = 1080
-    MARGIN_X = 60
-    START_Y = 145
-    CARD_W = 850
-    CARD_H = 110
-    GAP_X = 70
+    EXPORT_H = 1080
+    CARD_W = 830
+    CARD_H = 105
+    LEFT_X = 60
+    RIGHT_X = 1010
+    START_Y = 150
     GAP_Y = 14
     CARD_RADIUS = 12
     BORDER = 2
     INNER_PAD = 2
     DATE_W = 115
-    TEAM_W = 435
+    TEAM_W = 415
     PROJ_W = 145
     CS_W = 155
     HEADER_H = 28
-    ROW_H = 41
+    ROW_H = 38
+    DIVIDER_Y = 990
+    FOOTER_Y = 1020
 
     bg = "#f3f6f9"
-    fixture_count = len(fixtures_to_show)
-    rows_needed = math.ceil(fixture_count / 2) if fixture_count else 0
-    EXPORT_H = BASE_H
 
     img = Image.new("RGB", (EXPORT_W, EXPORT_H), hex_to_rgb(bg))
     draw = ImageDraw.Draw(img)
 
-    title_font = load_font(44, bold=True)
-    subtitle_font = load_font(24)
-    team_font = load_font(22, bold=True)
+    title_font = load_font(52, bold=True)
+    subtitle_font = load_font(26)
+    team_font = load_font(24, bold=True)
     small_font = load_font(17)
     metric_head_font = load_font(15, bold=True)
     metric_font = load_font(26, bold=True)
@@ -1743,36 +1742,27 @@ def build_export_image(fixtures_to_show, selected_round):
     badge_font = load_font(15, bold=True)
 
     draw.text(
-        (MARGIN_X, 36),
+        (LEFT_X, 36),
         "FPL Cartel World Cup Odds Dashboard",
         font=title_font,
         fill=hex_to_rgb("#111827"),
     )
     draw.text(
-        (MARGIN_X, 94),
-        f"{selected_round} - Projected goals and clean sheet odds",
+        (LEFT_X, 94),
+        f"{selected_round} · Page {export_page} of {total_export_pages}",
         font=subtitle_font,
         fill=hex_to_rgb("#4b5563"),
     )
-    draw.text(
-        (MARGIN_X, 122),
-        f"Showing {fixture_count} fixtures",
-        font=small_font,
-        fill=hex_to_rgb("#4b5563"),
-    )
-
-    left_x = MARGIN_X
-    right_x = MARGIN_X + CARD_W + GAP_X
-    max_card_bottom = START_Y
 
     for index, row in enumerate(fixtures_to_show.itertuples(index=False)):
-        col = index % 2
-        row_position = index // 2
+        if index >= 12:
+            break
 
-        x = left_x if col == 0 else right_x
+        col = 0 if index < 6 else 1
+        row_position = index if index < 6 else index - 6
+
+        x = LEFT_X if col == 0 else RIGHT_X
         y = START_Y + row_position * (CARD_H + GAP_Y)
-
-        max_card_bottom = max(max_card_bottom, y + CARD_H)
 
         date_x = x
         team_x = x + DATE_W
@@ -1861,16 +1851,11 @@ def build_export_image(fixtures_to_show, selected_round):
             width=2,
         )
 
-    max_card_bottom = START_Y + rows_needed * (CARD_H + GAP_Y)
-    footer_y = min(max_card_bottom + 35, 980)
-    divider_y = footer_y - 22
-    footer_text_y = footer_y + 10
-
-    draw.line((MARGIN_X, divider_y, EXPORT_W - MARGIN_X, divider_y), fill=hex_to_rgb("#d1d5db"), width=2)
-    draw.text((MARGIN_X, footer_text_y), "Graphics by ", font=footer_font, fill=hex_to_rgb("#111827"))
+    draw.line((LEFT_X, DIVIDER_Y, EXPORT_W - LEFT_X, DIVIDER_Y), fill=hex_to_rgb("#d1d5db"), width=2)
+    draw.text((LEFT_X, FOOTER_Y), "Graphics by ", font=footer_font, fill=hex_to_rgb("#111827"))
     graphics_prefix_width = draw.textlength("Graphics by ", font=footer_font)
     draw.text(
-        (MARGIN_X + graphics_prefix_width, footer_text_y),
+        (LEFT_X + graphics_prefix_width, FOOTER_Y),
         "FPL Cartel",
         font=footer_bold,
         fill=hex_to_rgb("#111827"),
@@ -1878,7 +1863,7 @@ def build_export_image(fixtures_to_show, selected_round):
     source_text = "Source: live odds via The Odds API"
     source_width = draw.textlength(source_text, font=footer_font)
     draw.text(
-        (EXPORT_W - MARGIN_X - source_width, footer_text_y),
+        (EXPORT_W - LEFT_X - source_width, FOOTER_Y),
         source_text,
         font=footer_font,
         fill=hex_to_rgb("#111827"),
@@ -1891,8 +1876,13 @@ def build_export_image(fixtures_to_show, selected_round):
 
 
 @st.cache_data(show_spinner=False)
-def build_export_image_bytes(fixtures_to_show, selected_round):
-    return build_export_image(fixtures_to_show, selected_round).getvalue()
+def build_export_image_bytes(fixtures_to_show, selected_round, export_page, total_export_pages):
+    return build_export_image(
+        fixtures_to_show,
+        selected_round,
+        export_page,
+        total_export_pages,
+    ).getvalue()
 
 
 def render_team_flag(team_name):
@@ -2032,8 +2022,27 @@ def render_desktop_dashboard():
     filtered = filtered[filtered["round"] == selected_round]
 
     with control_cols[2]:
+        export_page_size = 12
+        total_export_pages = max(1, math.ceil(len(filtered) / export_page_size))
+        export_page_options = [
+            f"Export page {page_number}"
+            for page_number in range(1, total_export_pages + 1)
+        ]
+        if total_export_pages > 1:
+            selected_export_page_label = st.selectbox(
+                "Export page",
+                export_page_options,
+            )
+            selected_export_page = export_page_options.index(selected_export_page_label) + 1
+        else:
+            selected_export_page = 1
+        export_start = (selected_export_page - 1) * export_page_size
+        export_end = export_start + export_page_size
+        export_fixtures = filtered.iloc[export_start:export_end]
         export_state_key = "export_image_state"
-        export_request_key = f"{fixture_set}|{selected_round}|{len(filtered)}"
+        export_request_key = (
+            f"{fixture_set}|{selected_round}|{len(filtered)}|{selected_export_page}"
+        )
         cached_export = st.session_state.get(export_state_key, {})
 
         if cached_export.get("request_key") != export_request_key:
@@ -2043,7 +2052,12 @@ def render_desktop_dashboard():
         if st.button("Download image", key="prepare_export_image"):
             st.session_state[export_state_key] = {
                 "request_key": export_request_key,
-                "data": build_export_image_bytes(filtered, selected_round),
+                "data": build_export_image_bytes(
+                    export_fixtures,
+                    selected_round,
+                    selected_export_page,
+                    total_export_pages,
+                ),
             }
             cached_export = st.session_state[export_state_key]
 
@@ -2053,7 +2067,8 @@ def render_desktop_dashboard():
                 data=cached_export["data"],
                 file_name=(
                     "fpl-cartel-world-cup-odds-"
-                    f"{selected_round.lower().replace(' ', '-')}-full.png"
+                    f"{selected_round.lower().replace(' ', '-')}-"
+                    f"page-{selected_export_page}.png"
                 ),
                 mime="image/png",
             )
