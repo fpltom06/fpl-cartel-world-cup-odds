@@ -96,6 +96,41 @@ st.markdown(
         display: none !important;
     }
 
+    [data-testid="stFeedback"] {
+        display: none !important;
+    }
+
+    [data-testid="stBaseButton-secondary"] {
+        display: none !important;
+    }
+
+    .st-emotion-cache-1wbqy5l,
+    .st-emotion-cache-1dp5vir,
+    .st-emotion-cache-1avcm0n {
+        display: none !important;
+    }
+
+    iframe[title="streamlit_feedback"] {
+        display: none !important;
+    }
+
+    [data-testid="stDownloadButton"] [data-testid="stBaseButton-secondary"],
+    [data-testid="stDownloadButton"] button,
+    [data-testid="stSelectbox"] [data-testid="stBaseButton-secondary"],
+    [data-testid="stSelectbox"] button,
+    [data-testid="stNumberInput"] [data-testid="stBaseButton-secondary"],
+    [data-testid="stNumberInput"] button {
+        display: inline-flex !important;
+    }
+
+    [data-testid="stAppViewContainer"] > div[style*="position: fixed"][style*="right"][style*="bottom"],
+    body > div[style*="position: fixed"][style*="right"][style*="bottom"] iframe,
+    body > div[style*="position: fixed"][style*="right"][style*="bottom"] {
+        display: none !important;
+        visibility: hidden !important;
+        pointer-events: none !important;
+    }
+
     .block-container {
         padding-top: 1rem !important;
     }
