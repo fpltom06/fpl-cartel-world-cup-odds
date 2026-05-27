@@ -495,8 +495,10 @@ def mobile_goal_projection(total_line, home_spread):
     if total_line is None or home_spread is None:
         return None, None
 
-    home_goals = (total_line - home_spread) / 2
-    return home_goals, total_line - home_goals
+    # World Cup fixtures are neutral: home/away only means API fixture order.
+    ordered_home_goals = (total_line - home_spread) / 2
+    ordered_away_goals = total_line - ordered_home_goals
+    return ordered_home_goals, ordered_away_goals
 
 
 def mobile_format_goals(value):
@@ -2056,9 +2058,10 @@ def calculate_team_goal_projections(total_line, home_spread):
     if total_line is None or home_spread is None:
         return None, None
 
-    home_projected_goals = (total_line - home_spread) / 2
-    away_projected_goals = total_line - home_projected_goals
-    return home_projected_goals, away_projected_goals
+    # World Cup fixtures are neutral: home/away only means fixture ordering.
+    ordered_home_projected_goals = (total_line - home_spread) / 2
+    ordered_away_projected_goals = total_line - ordered_home_projected_goals
+    return ordered_home_projected_goals, ordered_away_projected_goals
 
 
 def calculate_clean_sheet_percent(opponent_projected_goals):
