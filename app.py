@@ -725,28 +725,24 @@ def render_mobile_cards(fixtures):
     return f'<section class="mobile-card-list">{cards}</section>'
 
 
-def render_mobile_top_team_card(row, metric_key):
+def render_mobile_top_team_card(row, metric_key, selected_rounds):
     round_cells = []
-    for round_name in ROUND_TABLE_COLUMNS:
+    for round_name in selected_rounds:
         cell = row["rounds"].get(round_name)
         if not cell:
             round_cells.append(
                 '<div class="mobile-top-team-round">'
-                f'<span>{escape(round_name)}</span>'
+                f'<span>{escape(ROUND_TO_MD.get(round_name, round_name))}</span>'
                 "<strong>-</strong>"
                 "</div>"
             )
             continue
 
         value = cell[metric_key]
-        value_text = (
-            format_projected_goals(value)
-            if metric_key == "projected_goals"
-            else format_clean_sheet(value)
-        )
+        value_text = format_leaderboard_value(value, metric_key)
         round_cells.append(
             '<div class="mobile-top-team-round">'
-            f'<span>{escape(round_name)}</span>'
+            f'<span>{escape(ROUND_TO_MD.get(round_name, round_name))}</span>'
             f'<em>{escape(str(cell["opponent"]))}</em>'
             f'<strong>{escape(value_text)}</strong>'
             "</div>"
@@ -757,6 +753,7 @@ def render_mobile_top_team_card(row, metric_key):
         '<div class="mobile-top-team-name">'
         f'<span class="flag-emoji">{get_team_emoji(row["team"])}</span>'
         f'<strong>{escape(str(row["team"]))}</strong>'
+        f'<b>{escape(format_leaderboard_value(row["total"], metric_key))}</b>'
         "</div>"
         '<div class="mobile-top-team-rounds">'
         f'{"".join(round_cells)}'
@@ -765,12 +762,14 @@ def render_mobile_top_team_card(row, metric_key):
     )
 
 
-def render_mobile_top_teams(fixtures, metric_key):
-    rows = build_top_team_round_table(fixtures, metric_key)
+def render_mobile_top_teams(fixtures, metric_key, selected_rounds):
+    rows = build_leaderboard_rows(fixtures, metric_key, selected_rounds)
     if not rows:
         return '<div class="mobile-top-empty">No model data available yet.</div>'
 
-    cards = "\n".join(render_mobile_top_team_card(row, metric_key) for row in rows)
+    cards = "\n".join(
+        render_mobile_top_team_card(row, metric_key, selected_rounds) for row in rows
+    )
     return f'<section class="mobile-top-team-list">{cards}</section>'
 
 
@@ -1031,6 +1030,17 @@ def mobile_styles():
 
             .mobile-top-team-name strong {
                 font-size: 0.95rem;
+                min-width: 0;
+                flex: 1;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .mobile-top-team-name b {
+                color: #0f7a45;
+                font-size: 1rem;
+                font-weight: 950;
             }
 
             .mobile-top-team-rounds {
@@ -1156,15 +1166,21 @@ def render_mobile_dashboard():
         """,
         unsafe_allow_html=True,
     )
+    mobile_leaderboard_range = st.selectbox(
+        "Leaderboard range",
+        list(LEADERBOARD_RANGES.keys()),
+        key="mobile_leaderboard_range",
+    )
+    mobile_selected_rounds = LEADERBOARD_RANGES[mobile_leaderboard_range]
     mobile_goal_tab, mobile_cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
     with mobile_goal_tab:
         st.markdown(
-            render_mobile_top_teams(fixtures, "projected_goals"),
+            render_mobile_top_teams(fixtures, "projected_goals", mobile_selected_rounds),
             unsafe_allow_html=True,
         )
     with mobile_cs_tab:
         st.markdown(
-            render_mobile_top_teams(fixtures, "clean_sheet_pct"),
+            render_mobile_top_teams(fixtures, "clean_sheet_pct", mobile_selected_rounds),
             unsafe_allow_html=True,
         )
 
@@ -1553,7 +1569,12 @@ DESKTOP_STYLE = (
         }
 
         .top-teams-table th:first-child {
-            width: 30%;
+            width: 72px;
+            text-align: center;
+        }
+
+        .top-teams-table th:nth-child(2) {
+            width: 28%;
         }
 
         .top-teams-table td {
@@ -1576,6 +1597,10 @@ DESKTOP_STYLE = (
             min-width: 0;
         }
 
+        .top-rank-cell {
+            text-align: center;
+        }
+
         .top-rank {
             width: 26px;
             height: 26px;
@@ -1587,6 +1612,7 @@ DESKTOP_STYLE = (
             font-size: 0.76rem;
             font-weight: 900;
             flex: 0 0 26px;
+            margin: 0 auto;
         }
 
         .top-round-cell {
@@ -1615,6 +1641,12 @@ DESKTOP_STYLE = (
         .top-round-empty {
             color: #94a3b8;
             font-weight: 800;
+        }
+
+        .top-total-cell strong {
+            color: #0f7a45;
+            font-size: 1.3rem;
+            font-weight: 950;
         }
 
         @media (max-width: 880px) {
@@ -2091,6 +2123,19 @@ def format_clean_sheet(value):
 
 
 ROUND_TABLE_COLUMNS = ["Round 1", "Round 2", "Round 3"]
+ROUND_TO_MD = {
+    "Round 1": "MD1",
+    "Round 2": "MD2",
+    "Round 3": "MD3",
+}
+MD_TO_ROUND = {label: round_name for round_name, label in ROUND_TO_MD.items()}
+LEADERBOARD_RANGES = {
+    "MD1": ["Round 1"],
+    "MD2": ["Round 2"],
+    "MD3": ["Round 3"],
+    "MD1 + MD2": ["Round 1", "Round 2"],
+    "All group rounds": ROUND_TABLE_COLUMNS,
+}
 
 
 def optional_float(value):
@@ -2156,13 +2201,27 @@ def build_team_round_rows(fixtures):
     return pd.DataFrame(team_round_rows, columns=columns)
 
 
-def build_top_team_round_table(fixtures, metric_key, top_n=10):
+def metric_title(metric_key):
+    return "Projected Goals" if metric_key == "projected_goals" else "Clean Sheets"
+
+
+def metric_total_label(metric_key):
+    return "Total" if metric_key == "projected_goals" else "Total CS%"
+
+
+def format_leaderboard_value(value, metric_key):
+    if metric_key == "projected_goals":
+        return format_projected_goals(value)
+    return format_clean_sheet(value)
+
+
+def build_leaderboard_rows(fixtures, metric_key, selected_rounds, top_n=10):
     team_rows = build_team_round_rows(fixtures)
     if team_rows.empty or metric_key not in team_rows.columns:
         return []
 
     team_rows = team_rows[
-        team_rows["round"].isin(ROUND_TABLE_COLUMNS)
+        team_rows["round"].isin(selected_rounds)
         & team_rows["team"].notna()
         & team_rows[metric_key].notna()
     ].copy()
@@ -2173,15 +2232,16 @@ def build_top_team_round_table(fixtures, metric_key, top_n=10):
     best_by_team_round = team_rows.drop_duplicates(["team", "round"], keep="first")
     ranking = (
         best_by_team_round.groupby("team", as_index=False)[metric_key]
-        .max()
-        .sort_values(metric_key, ascending=False)
+        .sum()
+        .rename(columns={metric_key: "total"})
+        .sort_values("total", ascending=False)
         .head(top_n)
     )
 
     output_rows = []
-    for team in ranking["team"].tolist():
+    for team, total in ranking[["team", "total"]].itertuples(index=False):
         team_rounds = {}
-        for round_name in ROUND_TABLE_COLUMNS:
+        for round_name in selected_rounds:
             match_rows = best_by_team_round[
                 (best_by_team_round["team"] == team)
                 & (best_by_team_round["round"] == round_name)
@@ -2194,7 +2254,7 @@ def build_top_team_round_table(fixtures, metric_key, top_n=10):
                 "projected_goals": match["projected_goals"],
                 "clean_sheet_pct": match["clean_sheet_pct"],
             }
-        output_rows.append({"team": team, "rounds": team_rounds})
+        output_rows.append({"team": team, "rounds": team_rounds, "total": total})
 
     return output_rows
 
@@ -2353,6 +2413,178 @@ def load_export_logo(size):
     mask_draw.rounded_rectangle((0, 0, size, size), radius=max(12, size // 4), fill=255)
     output = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     output.paste(logo, (0, 0), mask)
+    return output
+
+
+def draw_text_fit(draw, xy, text, font, fill, max_width):
+    clean_text = str(text)
+    if draw.textlength(clean_text, font=font) <= max_width:
+        draw.text(xy, clean_text, font=font, fill=fill)
+        return
+
+    ellipsis = "..."
+    while clean_text and draw.textlength(clean_text + ellipsis, font=font) > max_width:
+        clean_text = clean_text[:-1]
+    draw.text(xy, clean_text + ellipsis, font=font, fill=fill)
+
+
+def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_rounds):
+    EXPORT_W = 1080
+    EXPORT_H = 1350
+    BG = "#f3f6f9"
+    MARGIN_X = 55
+    TABLE_TOP = 245
+    HEADER_H = 56
+    ROW_H = 86
+    FOOTER_DIVIDER_Y = 1265
+    FOOTER_TEXT_Y = 1290
+
+    img = Image.new("RGB", (EXPORT_W, EXPORT_H), hex_to_rgb(BG))
+    draw = ImageDraw.Draw(img)
+
+    title_font = load_font(42, bold=True)
+    subtitle_font = load_font(24)
+    link_font = load_font(17)
+    header_font = load_font(15, bold=True)
+    rank_font = load_font(19, bold=True)
+    team_font = load_font(23, bold=True)
+    opponent_font = load_font(16, bold=True)
+    value_font = load_font(24, bold=True)
+    total_font = load_font(27, bold=True)
+    footer_font = load_font(18)
+
+    logo = load_export_logo(82)
+    img.paste(logo, (MARGIN_X, 34), logo)
+    draw.text((MARGIN_X + 104, 38), metric_title(metric_key), font=title_font, fill=hex_to_rgb("#111827"))
+    draw.text((MARGIN_X + 106, 88), "FPL Cartel World Cup Odds Dashboard", font=link_font, fill=hex_to_rgb("#64748b"))
+    draw.text((MARGIN_X, 152), leaderboard_range, font=subtitle_font, fill=hex_to_rgb("#4b5563"))
+
+    rows = build_leaderboard_rows(fixtures, metric_key, selected_rounds)
+    table_left = MARGIN_X
+    table_right = EXPORT_W - MARGIN_X
+    table_w = table_right - table_left
+    rank_w = 72
+    team_w = 275 if len(selected_rounds) > 1 else 330
+    total_w = 150
+    md_w = (table_w - rank_w - team_w - total_w) / max(1, len(selected_rounds))
+    col_widths = [rank_w, team_w] + [md_w] * len(selected_rounds) + [total_w]
+    table_h = HEADER_H + min(10, len(rows)) * ROW_H
+
+    draw.rounded_rectangle(
+        (table_left, TABLE_TOP, table_right, TABLE_TOP + table_h),
+        radius=18,
+        fill=hex_to_rgb("#ffffff"),
+        outline=hex_to_rgb("#d8dee8"),
+        width=2,
+    )
+    draw.rounded_rectangle(
+        (table_left, TABLE_TOP, table_right, TABLE_TOP + HEADER_H),
+        radius=18,
+        fill=hex_to_rgb("#f5f7fa"),
+    )
+    draw.rectangle(
+        (table_left, TABLE_TOP + HEADER_H - 20, table_right, TABLE_TOP + HEADER_H),
+        fill=hex_to_rgb("#f5f7fa"),
+    )
+
+    headers = ["Rank", "Team"] + [ROUND_TO_MD.get(round_name, round_name) for round_name in selected_rounds] + [metric_total_label(metric_key)]
+    x = table_left
+    for header, width in zip(headers, col_widths):
+        draw_text_center(
+            draw,
+            (x, TABLE_TOP, x + width, TABLE_TOP + HEADER_H),
+            header.upper(),
+            header_font,
+            hex_to_rgb("#64748b"),
+        )
+        x += width
+
+    line_color = hex_to_rgb("#d8dee8")
+    y = TABLE_TOP + HEADER_H
+    draw.line((table_left, y, table_right, y), fill=line_color, width=1)
+
+    for index, row in enumerate(rows[:10], start=1):
+        row_top = TABLE_TOP + HEADER_H + (index - 1) * ROW_H
+        row_bottom = row_top + ROW_H
+        draw.line((table_left, row_bottom, table_right, row_bottom), fill=hex_to_rgb("#edf1f5"), width=1)
+
+        x = table_left
+        draw_text_center(
+            draw,
+            (x, row_top, x + rank_w, row_bottom),
+            str(index),
+            rank_font,
+            hex_to_rgb("#64748b"),
+        )
+        x += rank_w
+
+        draw_flag_badge(img, draw, row["team"], x + 20, row_top + 31, header_font)
+        draw_text_fit(
+            draw,
+            (x + 66, row_top + 29),
+            row["team"],
+            team_font,
+            hex_to_rgb("#111827"),
+            team_w - 82,
+        )
+        x += team_w
+
+        for round_name in selected_rounds:
+            cell = row["rounds"].get(round_name)
+            if cell:
+                draw_text_fit(
+                    draw,
+                    (x + 16, row_top + 16),
+                    cell["opponent"],
+                    opponent_font,
+                    hex_to_rgb("#111827"),
+                    md_w - 28,
+                )
+                draw.text(
+                    (x + 16, row_top + 45),
+                    format_leaderboard_value(cell[metric_key], metric_key),
+                    font=value_font,
+                    fill=hex_to_rgb("#0f7a45"),
+                )
+            else:
+                draw_text_center(
+                    draw,
+                    (x, row_top, x + md_w, row_bottom),
+                    "-",
+                    value_font,
+                    hex_to_rgb("#94a3b8"),
+                )
+            x += md_w
+
+        draw_text_center(
+            draw,
+            (x, row_top, x + total_w, row_bottom),
+            format_leaderboard_value(row["total"], metric_key),
+            total_font,
+            hex_to_rgb("#0f7a45"),
+        )
+
+    x = table_left
+    for width in col_widths[:-1]:
+        x += width
+        draw.line((x, TABLE_TOP, x, TABLE_TOP + table_h), fill=hex_to_rgb("#edf1f5"), width=1)
+
+    if not rows:
+        draw_text_center(
+            draw,
+            (table_left, TABLE_TOP + HEADER_H, table_right, TABLE_TOP + 260),
+            "No leaderboard data available yet.",
+            subtitle_font,
+            hex_to_rgb("#64748b"),
+        )
+
+    draw.line((MARGIN_X, FOOTER_DIVIDER_Y, EXPORT_W - MARGIN_X, FOOTER_DIVIDER_Y), fill=hex_to_rgb("#d1d5db"), width=2)
+    draw.text((MARGIN_X, FOOTER_TEXT_Y), "Graphics by FPL Cartel", font=footer_font, fill=hex_to_rgb("#111827"))
+    draw.text((EXPORT_W - 390, FOOTER_TEXT_Y), "Source: live odds via The Odds API", font=footer_font, fill=hex_to_rgb("#111827"))
+
+    output = BytesIO()
+    img.save(output, format="PNG")
+    output.seek(0)
     return output
 
 
@@ -2942,11 +3174,7 @@ def render_top_team_value_cell(cell, metric_key):
         return '<td class="top-round-cell top-round-empty">-</td>'
 
     value = cell[metric_key]
-    value_text = (
-        format_projected_goals(value)
-        if metric_key == "projected_goals"
-        else format_clean_sheet(value)
-    )
+    value_text = format_leaderboard_value(value, metric_key)
     return (
         '<td class="top-round-cell">'
         f'<span class="top-opponent">{escape(str(cell["opponent"]))}</span>'
@@ -2955,25 +3183,32 @@ def render_top_team_value_cell(cell, metric_key):
     )
 
 
-def render_top_teams_table(fixtures, metric_key):
-    rows = build_top_team_round_table(fixtures, metric_key)
+def render_leaderboard_table(fixtures, metric_key, selected_rounds):
+    rows = build_leaderboard_rows(fixtures, metric_key, selected_rounds)
     if not rows:
         return '<div class="empty-note">No team ranking data available yet.</div>'
 
+    round_headers = "".join(
+        f"<th>{escape(ROUND_TO_MD.get(round_name, round_name))}</th>"
+        for round_name in selected_rounds
+    )
     body_rows = []
     for index, row in enumerate(rows, start=1):
         round_cells = "".join(
             render_top_team_value_cell(row["rounds"].get(round_name), metric_key)
-            for round_name in ROUND_TABLE_COLUMNS
+            for round_name in selected_rounds
         )
         body_rows.append(
             "<tr>"
+            f'<td class="top-rank-cell"><span class="top-rank">{index}</span></td>'
             '<td class="top-team-cell">'
-            f'<span class="top-rank">{index}</span>'
             f"{render_team_flag(row['team'])}"
             f'<span>{escape(str(row["team"]))}</span>'
             "</td>"
             f"{round_cells}"
+            '<td class="top-total-cell">'
+            f'<strong>{escape(format_leaderboard_value(row["total"], metric_key))}</strong>'
+            "</td>"
             "</tr>"
         )
 
@@ -2981,10 +3216,10 @@ def render_top_teams_table(fixtures, metric_key):
         '<div class="top-teams-table-wrap">'
         '<table class="top-teams-table">'
         "<thead><tr>"
+        "<th>Rank</th>"
         "<th>Team</th>"
-        "<th>Round 1</th>"
-        "<th>Round 2</th>"
-        "<th>Round 3</th>"
+        f"{round_headers}"
+        f"<th>{escape(metric_total_label(metric_key))}</th>"
         "</tr></thead>"
         f'<tbody>{"".join(body_rows)}</tbody>'
         "</table>"
@@ -3003,16 +3238,52 @@ def render_top_teams_section(fixtures):
         """,
         unsafe_allow_html=True,
     )
+    leaderboard_range = st.selectbox(
+        "Leaderboard range",
+        list(LEADERBOARD_RANGES.keys()),
+        key="desktop_leaderboard_range",
+    )
+    selected_rounds = LEADERBOARD_RANGES[leaderboard_range]
     goals_tab, cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
     with goals_tab:
         st.markdown(
-            render_top_teams_table(fixtures, "projected_goals"),
+            render_leaderboard_table(fixtures, "projected_goals", selected_rounds),
             unsafe_allow_html=True,
+        )
+        st.download_button(
+            "Download leaderboard image",
+            data=build_leaderboard_image(
+                fixtures,
+                "projected_goals",
+                leaderboard_range,
+                selected_rounds,
+            ),
+            file_name=(
+                "fpl-cartel-leaderboard-projected-goals-"
+                f"{leaderboard_range.lower().replace(' ', '-').replace('+', 'plus')}.png"
+            ),
+            mime="image/png",
+            key="download_projected_goals_leaderboard",
         )
     with cs_tab:
         st.markdown(
-            render_top_teams_table(fixtures, "clean_sheet_pct"),
+            render_leaderboard_table(fixtures, "clean_sheet_pct", selected_rounds),
             unsafe_allow_html=True,
+        )
+        st.download_button(
+            "Download leaderboard image",
+            data=build_leaderboard_image(
+                fixtures,
+                "clean_sheet_pct",
+                leaderboard_range,
+                selected_rounds,
+            ),
+            file_name=(
+                "fpl-cartel-leaderboard-clean-sheets-"
+                f"{leaderboard_range.lower().replace(' ', '-').replace('+', 'plus')}.png"
+            ),
+            mime="image/png",
+            key="download_clean_sheet_leaderboard",
         )
 
 
