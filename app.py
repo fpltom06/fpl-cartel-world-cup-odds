@@ -2433,31 +2433,29 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
     EXPORT_H = 1350
     BG = "#f3f6f9"
     MARGIN_X = 55
-    TABLE_TOP = 245
-    HEADER_H = 56
-    ROW_H = 86
-    FOOTER_DIVIDER_Y = 1265
-    FOOTER_TEXT_Y = 1290
+    TABLE_TOP = 178
+    HEADER_H = 50
+    ROW_H = 94
 
     img = Image.new("RGB", (EXPORT_W, EXPORT_H), hex_to_rgb(BG))
     draw = ImageDraw.Draw(img)
 
-    title_font = load_font(42, bold=True)
-    subtitle_font = load_font(24)
-    link_font = load_font(17)
+    title_font = load_font(38, bold=True)
+    subtitle_font = load_font(22)
+    link_font = load_font(16)
     header_font = load_font(15, bold=True)
-    rank_font = load_font(19, bold=True)
-    team_font = load_font(23, bold=True)
-    opponent_font = load_font(16, bold=True)
-    value_font = load_font(24, bold=True)
-    total_font = load_font(27, bold=True)
+    rank_font = load_font(22, bold=True)
+    team_font = load_font(25, bold=True)
+    opponent_font = load_font(18, bold=True)
+    value_font = load_font(28, bold=True)
+    total_font = load_font(34, bold=True)
     footer_font = load_font(18)
 
-    logo = load_export_logo(82)
-    img.paste(logo, (MARGIN_X, 34), logo)
-    draw.text((MARGIN_X + 104, 38), metric_title(metric_key), font=title_font, fill=hex_to_rgb("#111827"))
-    draw.text((MARGIN_X + 106, 88), "FPL Cartel World Cup Odds Dashboard", font=link_font, fill=hex_to_rgb("#64748b"))
-    draw.text((MARGIN_X, 152), leaderboard_range, font=subtitle_font, fill=hex_to_rgb("#4b5563"))
+    logo = load_export_logo(66)
+    img.paste(logo, (MARGIN_X, 30), logo)
+    draw.text((MARGIN_X + 84, 29), metric_title(metric_key), font=title_font, fill=hex_to_rgb("#111827"))
+    draw.text((MARGIN_X + 86, 77), "FPL Cartel World Cup Odds Dashboard", font=link_font, fill=hex_to_rgb("#64748b"))
+    draw.text((MARGIN_X, 120), leaderboard_range, font=subtitle_font, fill=hex_to_rgb("#4b5563"))
 
     rows = build_leaderboard_rows(fixtures, metric_key, selected_rounds)
     table_left = MARGIN_X
@@ -2518,10 +2516,10 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
         )
         x += rank_w
 
-        draw_flag_badge(img, draw, row["team"], x + 20, row_top + 31, header_font)
+        draw_flag_badge(img, draw, row["team"], x + 20, row_top + 35, header_font)
         draw_text_fit(
             draw,
-            (x + 66, row_top + 29),
+            (x + 66, row_top + 32),
             row["team"],
             team_font,
             hex_to_rgb("#111827"),
@@ -2534,14 +2532,14 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
             if cell:
                 draw_text_fit(
                     draw,
-                    (x + 16, row_top + 16),
+                    (x + 16, row_top + 15),
                     cell["opponent"],
                     opponent_font,
                     hex_to_rgb("#111827"),
                     md_w - 28,
                 )
                 draw.text(
-                    (x + 16, row_top + 45),
+                    (x + 16, row_top + 48),
                     format_leaderboard_value(cell[metric_key], metric_key),
                     font=value_font,
                     fill=hex_to_rgb("#0f7a45"),
@@ -2578,9 +2576,11 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
             hex_to_rgb("#64748b"),
         )
 
-    draw.line((MARGIN_X, FOOTER_DIVIDER_Y, EXPORT_W - MARGIN_X, FOOTER_DIVIDER_Y), fill=hex_to_rgb("#d1d5db"), width=2)
-    draw.text((MARGIN_X, FOOTER_TEXT_Y), "Graphics by FPL Cartel", font=footer_font, fill=hex_to_rgb("#111827"))
-    draw.text((EXPORT_W - 390, FOOTER_TEXT_Y), "Source: live odds via The Odds API", font=footer_font, fill=hex_to_rgb("#111827"))
+    footer_divider_y = min(TABLE_TOP + table_h + 40, EXPORT_H - 88)
+    footer_text_y = footer_divider_y + 24
+    draw.line((MARGIN_X, footer_divider_y, EXPORT_W - MARGIN_X, footer_divider_y), fill=hex_to_rgb("#d1d5db"), width=2)
+    draw.text((MARGIN_X, footer_text_y), "Graphics by FPL Cartel", font=footer_font, fill=hex_to_rgb("#111827"))
+    draw.text((EXPORT_W - 390, footer_text_y), "Source: live odds via The Odds API", font=footer_font, fill=hex_to_rgb("#111827"))
 
     output = BytesIO()
     img.save(output, format="PNG")
