@@ -1617,6 +1617,7 @@ DESKTOP_STYLE = (
 
         .top-round-cell {
             min-height: 54px;
+            text-align: center;
         }
 
         .top-round-cell .top-opponent {
@@ -1624,9 +1625,9 @@ DESKTOP_STYLE = (
             color: #111827;
             font-size: 0.88rem;
             font-weight: 800;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            line-height: 1.15;
+            overflow-wrap: anywhere;
+            word-break: break-word;
         }
 
         .top-round-cell strong {
@@ -2428,6 +2429,66 @@ def draw_text_fit(draw, xy, text, font, fill, max_width):
     draw.text(xy, clean_text + ellipsis, font=font, fill=fill)
 
 
+def wrap_text(draw, text, font, max_width, max_lines=2):
+    words = str(text).split()
+    if not words:
+        return [""]
+
+    lines = []
+    current = ""
+    for word in words:
+        candidate = f"{current} {word}".strip()
+        if draw.textlength(candidate, font=font) <= max_width:
+            current = candidate
+            continue
+
+        if current:
+            lines.append(current)
+            current = word
+        else:
+            chunk = ""
+            for char in word:
+                candidate_chunk = f"{chunk}{char}"
+                if draw.textlength(candidate_chunk, font=font) <= max_width:
+                    chunk = candidate_chunk
+                else:
+                    lines.append(chunk)
+                    chunk = char
+            current = chunk
+
+        if len(lines) == max_lines:
+            break
+
+    if current and len(lines) < max_lines:
+        lines.append(current)
+
+    if len(lines) > max_lines:
+        lines = lines[:max_lines]
+
+    return lines
+
+
+def draw_wrapped_text_center(draw, box, text, font, fill, max_lines=2, line_height=1.15):
+    left, top, right, bottom = box
+    max_width = max(1, right - left - 10)
+    lines = wrap_text(draw, text, font, max_width, max_lines=max_lines)
+    bbox = draw.textbbox((0, 0), "Ag", font=font)
+    base_height = bbox[3] - bbox[1]
+    line_px = base_height * line_height
+    total_height = line_px * len(lines)
+    y = top + ((bottom - top) - total_height) / 2
+
+    for line in lines:
+        line_width = draw.textlength(line, font=font)
+        draw.text(
+            (left + ((right - left) - line_width) / 2, y),
+            line,
+            font=font,
+            fill=fill,
+        )
+        y += line_px
+
+
 def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_rounds):
     EXPORT_W = 1080
     EXPORT_H = 1350
@@ -2530,19 +2591,21 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
         for round_name in selected_rounds:
             cell = row["rounds"].get(round_name)
             if cell:
-                draw_text_fit(
+                draw_wrapped_text_center(
                     draw,
-                    (x + 16, row_top + 15),
+                    (x + 10, row_top + 9, x + md_w - 10, row_top + 50),
                     cell["opponent"],
                     opponent_font,
                     hex_to_rgb("#111827"),
-                    md_w - 28,
+                    max_lines=2,
+                    line_height=1.15,
                 )
-                draw.text(
-                    (x + 16, row_top + 48),
+                draw_text_center(
+                    draw,
+                    (x, row_top + 50, x + md_w, row_bottom - 6),
                     format_leaderboard_value(cell[metric_key], metric_key),
-                    font=value_font,
-                    fill=hex_to_rgb("#0f7a45"),
+                    value_font,
+                    hex_to_rgb("#0f7a45"),
                 )
             else:
                 draw_text_center(
