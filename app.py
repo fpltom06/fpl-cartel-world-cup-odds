@@ -725,6 +725,55 @@ def render_mobile_cards(fixtures):
     return f'<section class="mobile-card-list">{cards}</section>'
 
 
+def render_mobile_top_team_card(row, metric_key):
+    round_cells = []
+    for round_name in ROUND_TABLE_COLUMNS:
+        cell = row["rounds"].get(round_name)
+        if not cell:
+            round_cells.append(
+                '<div class="mobile-top-team-round">'
+                f'<span>{escape(round_name)}</span>'
+                "<strong>-</strong>"
+                "</div>"
+            )
+            continue
+
+        value = cell[metric_key]
+        value_text = (
+            format_projected_goals(value)
+            if metric_key == "projected_goals"
+            else format_clean_sheet(value)
+        )
+        round_cells.append(
+            '<div class="mobile-top-team-round">'
+            f'<span>{escape(round_name)}</span>'
+            f'<em>{escape(str(cell["opponent"]))}</em>'
+            f'<strong>{escape(value_text)}</strong>'
+            "</div>"
+        )
+
+    return (
+        '<article class="mobile-top-team-card">'
+        '<div class="mobile-top-team-name">'
+        f'<span class="flag-emoji">{get_team_emoji(row["team"])}</span>'
+        f'<strong>{escape(str(row["team"]))}</strong>'
+        "</div>"
+        '<div class="mobile-top-team-rounds">'
+        f'{"".join(round_cells)}'
+        "</div>"
+        "</article>"
+    )
+
+
+def render_mobile_top_teams(fixtures, metric_key):
+    rows = build_top_team_round_table(fixtures, metric_key)
+    if not rows:
+        return '<div class="mobile-top-empty">No model data available yet.</div>'
+
+    cards = "\n".join(render_mobile_top_team_card(row, metric_key) for row in rows)
+    return f'<section class="mobile-top-team-list">{cards}</section>'
+
+
 def mobile_styles():
     st.markdown(
         """
@@ -939,6 +988,104 @@ def mobile_styles():
                 color: #64748b;
             }
 
+            .mobile-top-section {
+                max-width: 430px;
+                margin: 1.5rem auto 0;
+            }
+
+            .mobile-top-section h2 {
+                margin: 0 0 0.25rem;
+                color: #111827;
+                font-size: 1.35rem;
+                line-height: 1.1;
+            }
+
+            .mobile-top-section p {
+                margin: 0 0 0.75rem;
+                color: #687380;
+                font-size: 0.84rem;
+            }
+
+            .mobile-top-team-list {
+                display: grid;
+                gap: 0.7rem;
+                margin-top: 0.8rem;
+            }
+
+            .mobile-top-team-card {
+                background: #ffffff;
+                border: 1px solid #d8dee8;
+                border-radius: 10px;
+                overflow: hidden;
+                box-shadow: 0 2px 6px rgba(23, 32, 42, 0.05);
+            }
+
+            .mobile-top-team-name {
+                display: flex;
+                align-items: center;
+                gap: 0.35rem;
+                padding: 0.7rem 0.75rem;
+                border-bottom: 1px solid #d8dee8;
+                color: #111827;
+            }
+
+            .mobile-top-team-name strong {
+                font-size: 0.95rem;
+            }
+
+            .mobile-top-team-rounds {
+                display: grid;
+                grid-template-columns: 1fr;
+            }
+
+            .mobile-top-team-round {
+                display: grid;
+                grid-template-columns: 78px minmax(0, 1fr) 62px;
+                align-items: center;
+                gap: 0.4rem;
+                min-height: 44px;
+                padding: 0.45rem 0.75rem;
+                border-bottom: 1px solid #edf1f5;
+            }
+
+            .mobile-top-team-round:last-child {
+                border-bottom: 0;
+            }
+
+            .mobile-top-team-round span {
+                color: #687380;
+                font-size: 0.72rem;
+                font-weight: 850;
+                text-transform: uppercase;
+            }
+
+            .mobile-top-team-round em {
+                color: #111827;
+                font-size: 0.84rem;
+                font-style: normal;
+                font-weight: 800;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            .mobile-top-team-round strong {
+                color: #0f7a45;
+                font-size: 0.92rem;
+                text-align: right;
+            }
+
+            .mobile-top-empty {
+                margin-top: 0.8rem;
+                padding: 0.9rem;
+                background: #ffffff;
+                border: 1px dashed #bdc8d3;
+                border-radius: 10px;
+                color: #687380;
+                font-weight: 800;
+                text-align: center;
+            }
+
             @media (max-width: 768px) {
                 header[data-testid="stHeader"] {
                     display: none !important;
@@ -1000,6 +1147,26 @@ def render_mobile_dashboard():
     end = start + page_size
     fixtures_page = fixtures_to_show.iloc[start:end]
     st.markdown(render_mobile_cards(fixtures_page), unsafe_allow_html=True)
+    st.markdown(
+        """
+        <section class="mobile-top-section">
+          <h2>Top Teams by Round</h2>
+          <p>Live odds via The Odds API</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    mobile_goal_tab, mobile_cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
+    with mobile_goal_tab:
+        st.markdown(
+            render_mobile_top_teams(fixtures, "projected_goals"),
+            unsafe_allow_html=True,
+        )
+    with mobile_cs_tab:
+        st.markdown(
+            render_mobile_top_teams(fixtures, "clean_sheet_pct"),
+            unsafe_allow_html=True,
+        )
 
 
 DESKTOP_STYLE = (
@@ -1330,6 +1497,124 @@ DESKTOP_STYLE = (
             color: var(--muted);
             text-align: center;
             font-weight: 700;
+        }
+
+        .top-teams-section {
+            margin: 2rem 0 1rem;
+        }
+
+        .section-kicker {
+            color: #0f7a45;
+            font-size: 0.78rem;
+            font-weight: 900;
+            letter-spacing: 0;
+            text-transform: uppercase;
+            margin-bottom: 0.35rem;
+        }
+
+        .top-teams-section h2 {
+            margin: 0;
+            color: #111827;
+            font-size: 2rem;
+            line-height: 1.1;
+            font-weight: 900;
+        }
+
+        .top-teams-section p {
+            margin: 0.35rem 0 0;
+            color: var(--muted);
+            font-size: 0.98rem;
+        }
+
+        .top-teams-table-wrap {
+            margin-top: 0.9rem;
+            background: #ffffff;
+            border: 1px solid #d8dee8;
+            border-radius: 14px;
+            overflow: hidden;
+            box-shadow: 0 12px 24px rgba(23, 32, 42, 0.08);
+        }
+
+        .top-teams-table {
+            width: 100%;
+            border-collapse: collapse;
+            table-layout: fixed;
+        }
+
+        .top-teams-table th {
+            background: #f5f7fa;
+            border-bottom: 1px solid #d8dee8;
+            color: #64748b;
+            font-size: 0.72rem;
+            font-weight: 900;
+            padding: 0.85rem 1rem;
+            text-align: left;
+            text-transform: uppercase;
+        }
+
+        .top-teams-table th:first-child {
+            width: 30%;
+        }
+
+        .top-teams-table td {
+            border-bottom: 1px solid #edf1f5;
+            padding: 0.78rem 1rem;
+            vertical-align: middle;
+        }
+
+        .top-teams-table tbody tr:last-child td {
+            border-bottom: 0;
+        }
+
+        .top-team-cell {
+            display: flex;
+            align-items: center;
+            gap: 0.7rem;
+            color: #111827;
+            font-size: 0.98rem;
+            font-weight: 900;
+            min-width: 0;
+        }
+
+        .top-rank {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            display: grid;
+            place-items: center;
+            background: #eef3f7;
+            color: #64748b;
+            font-size: 0.76rem;
+            font-weight: 900;
+            flex: 0 0 26px;
+        }
+
+        .top-round-cell {
+            min-height: 54px;
+        }
+
+        .top-round-cell .top-opponent {
+            display: block;
+            color: #111827;
+            font-size: 0.88rem;
+            font-weight: 800;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .top-round-cell strong {
+            display: block;
+            margin-top: 0.16rem;
+            color: #0f7a45;
+            font-size: 1.22rem;
+            font-weight: 950;
+            line-height: 1;
+        }
+
+        .top-round-empty {
+            color: #94a3b8;
+            font-weight: 800;
         }
 
         @media (max-width: 880px) {
@@ -1803,6 +2088,115 @@ def format_clean_sheet(value):
     if value is None or pd.isna(value):
         return "-"
     return f"{int(value)}%"
+
+
+ROUND_TABLE_COLUMNS = ["Round 1", "Round 2", "Round 3"]
+
+
+def optional_float(value):
+    if value is None or pd.isna(value):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def optional_int(value):
+    number = optional_float(value)
+    if number is None:
+        return None
+    return int(round(number))
+
+
+def build_team_round_rows(fixtures):
+    columns = [
+        "team",
+        "opponent",
+        "round",
+        "projected_goals",
+        "clean_sheet_pct",
+    ]
+    if fixtures is None or fixtures.empty:
+        return pd.DataFrame(columns=columns)
+
+    team_round_rows = []
+    for fixture in fixtures.to_dict("records"):
+        home_team = fixture.get("home_team") or fixture.get("Home")
+        away_team = fixture.get("away_team") or fixture.get("Away")
+        round_name = fixture.get("round")
+
+        team_round_rows.append(
+            {
+                "team": home_team,
+                "opponent": away_team,
+                "round": round_name,
+                "projected_goals": optional_float(
+                    fixture.get("home_xg", fixture.get("home_goals_value"))
+                ),
+                "clean_sheet_pct": optional_int(
+                    fixture.get("home_cs", fixture.get("home_cs_value"))
+                ),
+            }
+        )
+        team_round_rows.append(
+            {
+                "team": away_team,
+                "opponent": home_team,
+                "round": round_name,
+                "projected_goals": optional_float(
+                    fixture.get("away_xg", fixture.get("away_goals_value"))
+                ),
+                "clean_sheet_pct": optional_int(
+                    fixture.get("away_cs", fixture.get("away_cs_value"))
+                ),
+            }
+        )
+
+    return pd.DataFrame(team_round_rows, columns=columns)
+
+
+def build_top_team_round_table(fixtures, metric_key, top_n=10):
+    team_rows = build_team_round_rows(fixtures)
+    if team_rows.empty or metric_key not in team_rows.columns:
+        return []
+
+    team_rows = team_rows[
+        team_rows["round"].isin(ROUND_TABLE_COLUMNS)
+        & team_rows["team"].notna()
+        & team_rows[metric_key].notna()
+    ].copy()
+    if team_rows.empty:
+        return []
+
+    team_rows = team_rows.sort_values(metric_key, ascending=False)
+    best_by_team_round = team_rows.drop_duplicates(["team", "round"], keep="first")
+    ranking = (
+        best_by_team_round.groupby("team", as_index=False)[metric_key]
+        .max()
+        .sort_values(metric_key, ascending=False)
+        .head(top_n)
+    )
+
+    output_rows = []
+    for team in ranking["team"].tolist():
+        team_rounds = {}
+        for round_name in ROUND_TABLE_COLUMNS:
+            match_rows = best_by_team_round[
+                (best_by_team_round["team"] == team)
+                & (best_by_team_round["round"] == round_name)
+            ]
+            if match_rows.empty:
+                continue
+            match = match_rows.iloc[0]
+            team_rounds[round_name] = {
+                "opponent": match["opponent"],
+                "projected_goals": match["projected_goals"],
+                "clean_sheet_pct": match["clean_sheet_pct"],
+            }
+        output_rows.append({"team": team, "rounds": team_rounds})
+
+    return output_rows
 
 
 def goal_cell_class(value):
@@ -2543,6 +2937,85 @@ def render_fixture_groups(fixtures):
     return "\n".join(groups_html)
 
 
+def render_top_team_value_cell(cell, metric_key):
+    if not cell:
+        return '<td class="top-round-cell top-round-empty">-</td>'
+
+    value = cell[metric_key]
+    value_text = (
+        format_projected_goals(value)
+        if metric_key == "projected_goals"
+        else format_clean_sheet(value)
+    )
+    return (
+        '<td class="top-round-cell">'
+        f'<span class="top-opponent">{escape(str(cell["opponent"]))}</span>'
+        f'<strong>{escape(value_text)}</strong>'
+        "</td>"
+    )
+
+
+def render_top_teams_table(fixtures, metric_key):
+    rows = build_top_team_round_table(fixtures, metric_key)
+    if not rows:
+        return '<div class="empty-note">No team ranking data available yet.</div>'
+
+    body_rows = []
+    for index, row in enumerate(rows, start=1):
+        round_cells = "".join(
+            render_top_team_value_cell(row["rounds"].get(round_name), metric_key)
+            for round_name in ROUND_TABLE_COLUMNS
+        )
+        body_rows.append(
+            "<tr>"
+            '<td class="top-team-cell">'
+            f'<span class="top-rank">{index}</span>'
+            f"{render_team_flag(row['team'])}"
+            f'<span>{escape(str(row["team"]))}</span>'
+            "</td>"
+            f"{round_cells}"
+            "</tr>"
+        )
+
+    return (
+        '<div class="top-teams-table-wrap">'
+        '<table class="top-teams-table">'
+        "<thead><tr>"
+        "<th>Team</th>"
+        "<th>Round 1</th>"
+        "<th>Round 2</th>"
+        "<th>Round 3</th>"
+        "</tr></thead>"
+        f'<tbody>{"".join(body_rows)}</tbody>'
+        "</table>"
+        "</div>"
+    )
+
+
+def render_top_teams_section(fixtures):
+    st.markdown(
+        """
+        <section class="top-teams-section">
+          <div class="section-kicker">FPL Cartel model</div>
+          <h2>Top Teams by Round</h2>
+          <p>Opponent and model-estimated value for each team's group-stage round.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    goals_tab, cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
+    with goals_tab:
+        st.markdown(
+            render_top_teams_table(fixtures, "projected_goals"),
+            unsafe_allow_html=True,
+        )
+    with cs_tab:
+        st.markdown(
+            render_top_teams_table(fixtures, "clean_sheet_pct"),
+            unsafe_allow_html=True,
+        )
+
+
 def render_export_area(fixtures):
     return (
         '<section class="export-area">'
@@ -2650,6 +3123,11 @@ def render_desktop_dashboard():
         )
     else:
         st.markdown(render_export_area(filtered), unsafe_allow_html=True)
+
+    top_team_fixtures = display_fixtures[
+        display_fixtures["fixture_set"] == fixture_set
+    ]
+    render_top_teams_section(top_team_fixtures)
 
     with st.expander("Debug API response", expanded=False):
         if api_error:
