@@ -755,8 +755,12 @@ def render_mobile_top_team_card(row, metric_key, selected_rounds):
         '<div class="mobile-top-team-name">'
         f'<span class="flag-emoji">{get_team_emoji(row["team"])}</span>'
         f'<strong>{escape(str(row["team"]))}</strong>'
-        f'<b>{escape(format_leaderboard_value(row["total"], metric_key))}</b>'
-        "</div>"
+        + (
+            f'<b>{escape(format_leaderboard_value(row["total"], metric_key))}</b>'
+            if show_leaderboard_total(metric_key)
+            else ""
+        )
+        + "</div>"
         '<div class="mobile-top-team-rounds">'
         f'{"".join(round_cells)}'
         "</div>"
@@ -2213,6 +2217,10 @@ def metric_total_label(metric_key):
     return "Total" if metric_key == "projected_goals" else "Total CS%"
 
 
+def show_leaderboard_total(metric_key):
+    return metric_key == "projected_goals"
+
+
 def format_leaderboard_value(value, metric_key):
     if metric_key == "projected_goals":
         return format_projected_goals(value)
@@ -2527,9 +2535,11 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
     table_w = table_right - table_left
     rank_w = 72
     team_w = 275 if len(selected_rounds) > 1 else 330
-    total_w = 150
+    total_w = 150 if show_leaderboard_total(metric_key) else 0
     md_w = (table_w - rank_w - team_w - total_w) / max(1, len(selected_rounds))
-    col_widths = [rank_w, team_w] + [md_w] * len(selected_rounds) + [total_w]
+    col_widths = [rank_w, team_w] + [md_w] * len(selected_rounds)
+    if show_leaderboard_total(metric_key):
+        col_widths.append(total_w)
     table_h = HEADER_H + min(10, len(rows)) * ROW_H
 
     draw.rounded_rectangle(
@@ -2549,7 +2559,11 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
         fill=hex_to_rgb("#f5f7fa"),
     )
 
-    headers = ["Rank", "Team"] + [ROUND_TO_MD.get(round_name, round_name) for round_name in selected_rounds] + [metric_total_label(metric_key)]
+    headers = ["Rank", "Team"] + [
+        ROUND_TO_MD.get(round_name, round_name) for round_name in selected_rounds
+    ]
+    if show_leaderboard_total(metric_key):
+        headers.append(metric_total_label(metric_key))
     x = table_left
     for header, width in zip(headers, col_widths):
         draw_text_center(
@@ -2620,13 +2634,14 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
                 )
             x += md_w
 
-        draw_text_center(
-            draw,
-            (x, row_top, x + total_w, row_bottom),
-            format_leaderboard_value(row["total"], metric_key),
-            total_font,
-            hex_to_rgb("#0f7a45"),
-        )
+        if show_leaderboard_total(metric_key):
+            draw_text_center(
+                draw,
+                (x, row_top, x + total_w, row_bottom),
+                format_leaderboard_value(row["total"], metric_key),
+                total_font,
+                hex_to_rgb("#0f7a45"),
+            )
 
     x = table_left
     for width in col_widths[:-1]:
@@ -3264,6 +3279,13 @@ def render_leaderboard_table(fixtures, metric_key, selected_rounds):
             render_top_team_value_cell(row["rounds"].get(round_name), metric_key)
             for round_name in selected_rounds
         )
+        total_cell = (
+            '<td class="top-total-cell">'
+            f'<strong>{escape(format_leaderboard_value(row["total"], metric_key))}</strong>'
+            "</td>"
+            if show_leaderboard_total(metric_key)
+            else ""
+        )
         body_rows.append(
             "<tr>"
             f'<td class="top-rank-cell"><span class="top-rank">{index}</span></td>'
@@ -3272,11 +3294,14 @@ def render_leaderboard_table(fixtures, metric_key, selected_rounds):
             f'<span>{escape(str(row["team"]))}</span>'
             "</td>"
             f"{round_cells}"
-            '<td class="top-total-cell">'
-            f'<strong>{escape(format_leaderboard_value(row["total"], metric_key))}</strong>'
-            "</td>"
+            f"{total_cell}"
             "</tr>"
         )
+    total_header = (
+        f"<th>{escape(metric_total_label(metric_key))}</th>"
+        if show_leaderboard_total(metric_key)
+        else ""
+    )
 
     return (
         '<div class="top-teams-table-wrap">'
@@ -3285,7 +3310,7 @@ def render_leaderboard_table(fixtures, metric_key, selected_rounds):
         "<th>Rank</th>"
         "<th>Team</th>"
         f"{round_headers}"
-        f"<th>{escape(metric_total_label(metric_key))}</th>"
+        f"{total_header}"
         "</tr></thead>"
         f'<tbody>{"".join(body_rows)}</tbody>'
         "</table>"
