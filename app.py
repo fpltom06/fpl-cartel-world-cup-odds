@@ -48,6 +48,7 @@ NO_LIVE_ODDS_MESSAGE = (
     "No World Cup betting odds available yet. This usually happens when fixtures "
     "are too far away or markets are not open."
 )
+PINNACLE_UNAVAILABLE_MESSAGE = "Pinnacle odds unavailable"
 USE_BROWSER_EXPORT = False
 SUBLAUNCH_URL = "https://sublaunch.com/fplcartel"
 LOGO_PATH = Path("assets/fpl-cartel-logo.png")
@@ -463,32 +464,45 @@ def mobile_extract_market(bookmaker, market_key):
     return {}
 
 
+def is_pinnacle_bookmaker(bookmaker):
+    key = str(bookmaker.get("key", "")).lower()
+    title = str(bookmaker.get("title", "")).lower()
+    return key == "pinnacle" or title == "pinnacle"
+
+
+def find_pinnacle_bookmaker(event):
+    for bookmaker in event.get("bookmakers", []):
+        if is_pinnacle_bookmaker(bookmaker):
+            return bookmaker
+    return None
+
+
 def mobile_extract_total_and_spread(event):
     home_team = event.get("home_team")
     if not home_team:
         return None, None
 
-    for bookmaker in event.get("bookmakers", []):
-        total = None
-        total_market = mobile_extract_market(bookmaker, "totals")
-        for outcome in total_market.get("outcomes", []):
-            point = outcome.get("point")
-            if isinstance(point, (int, float)):
-                total = float(point)
-                break
+    bookmaker = find_pinnacle_bookmaker(event)
+    if not bookmaker:
+        return None, None
 
-        spread = None
-        spread_market = mobile_extract_market(bookmaker, "spreads")
-        for outcome in spread_market.get("outcomes", []):
-            point = outcome.get("point")
-            if outcome.get("name") == home_team and isinstance(point, (int, float)):
-                spread = float(point)
-                break
+    total = None
+    total_market = mobile_extract_market(bookmaker, "totals")
+    for outcome in total_market.get("outcomes", []):
+        point = outcome.get("point")
+        if isinstance(point, (int, float)):
+            total = float(point)
+            break
 
-        if total is not None and spread is not None:
-            return total, spread
+    spread = None
+    spread_market = mobile_extract_market(bookmaker, "spreads")
+    for outcome in spread_market.get("outcomes", []):
+        point = outcome.get("point")
+        if outcome.get("name") == home_team and isinstance(point, (int, float)):
+            spread = float(point)
+            break
 
-    return None, None
+    return total, spread
 
 
 def mobile_goal_projection(total_line, home_spread):
@@ -633,6 +647,11 @@ def mobile_parse_odds_response(payload):
         home_goals, away_goals = mobile_goal_projection(total_line, home_spread)
         home_cs = round(math.exp(-away_goals) * 100) if away_goals is not None else None
         away_cs = round(math.exp(-home_goals) * 100) if home_goals is not None else None
+        odds_note = (
+            PINNACLE_UNAVAILABLE_MESSAGE
+            if total_line is None or home_spread is None
+            else ""
+        )
 
         rows.append(
             {
@@ -648,6 +667,7 @@ def mobile_parse_odds_response(payload):
                 "home_cs_value": home_cs,
                 "away_goals_value": away_goals,
                 "away_cs_value": away_cs,
+                "odds_note": odds_note,
                 "round": mobile_round_for_fixture(home_team, away_team, dt),
                 "commence_time_dt": dt,
             }
@@ -686,12 +706,19 @@ def mobile_sample_fixtures():
     rows["Away Goals"] = rows["Away Goals"].apply(mobile_format_goals)
     rows["Home CS%"] = rows["Home CS%"].apply(mobile_format_cs)
     rows["Away CS%"] = rows["Away CS%"].apply(mobile_format_cs)
+    rows["odds_note"] = ""
     return rows
 
 
 def render_mobile_card(row):
     home = str(row["Home"])
     away = str(row["Away"])
+    note = str(row.get("odds_note", "") or "")
+    note_html = (
+        f'<div class="mobile-odds-note">{escape(note)}</div>'
+        if note
+        else ""
+    )
     return (
         '<article class="mobile-fixture-card">'
         '<div class="mobile-date">'
@@ -718,6 +745,7 @@ def render_mobile_card(row):
         f'<div class="mobile-metric {mobile_cs_cell_class(row["home_cs_value"])}">{escape(str(row["Home CS%"]))}</div>'
         f'<div class="mobile-metric {mobile_cs_cell_class(row["away_cs_value"])}">{escape(str(row["Away CS%"]))}</div>'
         "</div>"
+        f"{note_html}"
         "</article>"
     )
 
@@ -849,6 +877,15 @@ def mobile_styles():
                 text-decoration: underline;
             }
 
+            .source-note {
+                display: block;
+                max-width: 430px;
+                margin: -0.35rem auto 0.8rem;
+                color: #64748b;
+                font-size: 0.82rem;
+                font-weight: 800;
+            }
+
             .mobile-card-list {
                 display: grid;
                 grid-template-columns: 1fr;
@@ -956,6 +993,17 @@ def mobile_styles():
 
             .mobile-metric:last-child {
                 border-bottom: 0;
+            }
+
+            .mobile-odds-note {
+                grid-column: 1 / -1;
+                padding: 0.42rem 0.55rem;
+                border-top: 1px solid #d8dee8;
+                background: #fff7ed;
+                color: #9a3412;
+                font-size: 0.72rem;
+                font-weight: 850;
+                text-align: center;
             }
 
             .dark-green {
@@ -1143,6 +1191,10 @@ def render_mobile_dashboard():
         render_brand_header(),
         unsafe_allow_html=True,
     )
+    st.markdown(
+        '<div class="source-note">Live odds via The Odds API &middot; Pinnacle only</div>',
+        unsafe_allow_html=True,
+    )
 
     live_fixtures = mobile_parse_odds_response(fetch_world_cup_odds_mobile())
     fixtures = live_fixtures if not live_fixtures.empty else mobile_sample_fixtures()
@@ -1167,7 +1219,7 @@ def render_mobile_dashboard():
         """
         <section class="mobile-top-section">
           <h2>Top Teams by Round</h2>
-          <p>Live odds via The Odds API</p>
+          <p>Live odds via The Odds API &middot; Pinnacle only</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -1294,6 +1346,15 @@ DESKTOP_STYLE = (
             text-decoration: underline;
         }
 
+        .source-note {
+            display: inline-flex;
+            align-items: center;
+            margin: -0.35rem 0 1rem;
+            color: #64748b;
+            font-size: 0.9rem;
+            font-weight: 800;
+        }
+
         div[data-testid="stHorizontalBlock"] {
             gap: 1rem;
         }
@@ -1362,6 +1423,23 @@ DESKTOP_STYLE = (
             grid-template-columns: 92px minmax(0, 1fr) 92px 92px;
             overflow: hidden;
             box-shadow: 0 10px 20px rgba(23, 32, 42, 0.08);
+        }
+
+        .fixture-card-wrap {
+            display: grid;
+            gap: 0.35rem;
+        }
+
+        .fixture-note {
+            padding: 0.48rem 0.7rem;
+            border: 1px solid #fed7aa;
+            border-radius: 9px;
+            background: #fff7ed;
+            color: #9a3412;
+            font-size: 0.78rem;
+            font-weight: 850;
+            text-align: center;
+            box-shadow: 0 6px 14px rgba(23, 32, 42, 0.04);
         }
 
         .date-block {
@@ -1868,15 +1946,6 @@ ROUND_ORDER = {
     "Knockouts": 3,
 }
 
-SHARP_BOOKS = [
-    "Pinnacle",
-    "Betfair Exchange",
-    "SBOBET",
-    "Matchbook",
-    "Marathon Bet",
-    "188Bet",
-]
-
 ROUND_OVERRIDES = {
     ("Uzbekistan", "Colombia"): "Round 1",
     ("Colombia", "Uzbekistan"): "Round 1",
@@ -1938,6 +2007,7 @@ SAMPLE_FIXTURES["round"] = SAMPLE_FIXTURES.apply(
     ),
     axis=1,
 )
+SAMPLE_FIXTURES["odds_note"] = ""
 
 
 def format_price(price):
@@ -1954,13 +2024,6 @@ def extract_market(bookmaker, market_key):
         if market.get("key") == market_key:
             return market
     return {}
-
-
-def bookmaker_rank(bookmaker):
-    try:
-        return SHARP_BOOKS.index(bookmaker["title"])
-    except (KeyError, ValueError):
-        return 999
 
 
 def extract_total(bookmaker):
@@ -1981,71 +2044,16 @@ def extract_spread(bookmaker, home_team):
     return None
 
 
-def has_h2h_market(bookmaker):
-    return bool(extract_market(bookmaker, "h2h").get("outcomes"))
-
-
-def average(values):
-    return sum(values) / len(values) if values else None
-
-
 def extract_total_and_home_spread(event):
     home_team = event.get("home_team")
     if not home_team:
         return None, None
 
-    sorted_books = sorted(event.get("bookmakers", []), key=bookmaker_rank)
-    sharp_candidates = []
+    bookmaker = find_pinnacle_bookmaker(event)
+    if not bookmaker:
+        return None, None
 
-    for bookmaker in sorted_books:
-        if bookmaker.get("title") not in SHARP_BOOKS:
-            continue
-
-        total = extract_total(bookmaker)
-        spread = extract_spread(bookmaker, home_team)
-
-        if total is not None and spread is not None:
-            sharp_candidates.append(
-                {
-                    "total": total,
-                    "spread": spread,
-                    "has_h2h": has_h2h_market(bookmaker),
-                }
-            )
-
-    if sharp_candidates:
-        preferred = [
-            candidate for candidate in sharp_candidates if candidate["has_h2h"]
-        ] or sharp_candidates
-        return (
-            average([candidate["total"] for candidate in preferred]),
-            average([candidate["spread"] for candidate in preferred]),
-        )
-
-    fallback_candidates = []
-    for bookmaker in sorted_books:
-        total = extract_total(bookmaker)
-        spread = extract_spread(bookmaker, home_team)
-
-        if total is not None and spread is not None:
-            fallback_candidates.append(
-                {
-                    "total": total,
-                    "spread": spread,
-                    "has_h2h": has_h2h_market(bookmaker),
-                    "rank": bookmaker_rank(bookmaker),
-                }
-            )
-
-    if fallback_candidates:
-        fallback_candidates = sorted(
-            fallback_candidates,
-            key=lambda candidate: (not candidate["has_h2h"], candidate["rank"]),
-        )
-        best = fallback_candidates[0]
-        return best["total"], best["spread"]
-
-    return None, None
+    return extract_total(bookmaker), extract_spread(bookmaker, home_team)
 
 
 def extract_total_line(event):
@@ -2084,6 +2092,11 @@ def parse_odds_response(payload):
         away_team = event.get("away_team", "Away team")
         total_line, home_spread = extract_total_and_home_spread(event)
         home_xg, away_xg = calculate_team_goal_projections(total_line, home_spread)
+        odds_note = (
+            PINNACLE_UNAVAILABLE_MESSAGE
+            if total_line is None or home_spread is None
+            else ""
+        )
 
         rows.append(
             {
@@ -2107,6 +2120,7 @@ def parse_odds_response(payload):
                 "away_cs": calculate_clean_sheet_percent(home_xg),
                 "total_line": total_line,
                 "home_spread": home_spread,
+                "odds_note": odds_note,
                 "delta": "Live odds",
                 "source": "api",
             }
@@ -2661,7 +2675,7 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
     footer_text_y = footer_divider_y + 24
     draw.line((MARGIN_X, footer_divider_y, EXPORT_W - MARGIN_X, footer_divider_y), fill=hex_to_rgb("#d1d5db"), width=2)
     draw.text((MARGIN_X, footer_text_y), "Graphics by FPL Cartel", font=footer_font, fill=hex_to_rgb("#111827"))
-    draw.text((EXPORT_W - 390, footer_text_y), "Source: live odds via The Odds API", font=footer_font, fill=hex_to_rgb("#111827"))
+    draw.text((EXPORT_W - 430, footer_text_y), "Source: Pinnacle odds via The Odds API", font=footer_font, fill=hex_to_rgb("#111827"))
 
     output = BytesIO()
     img.save(output, format="PNG")
@@ -2838,7 +2852,7 @@ def build_export_image(fixtures_to_show, selected_round):
         font=footer_bold,
         fill=hex_to_rgb("#111827"),
     )
-    source_text = "Source: live odds via The Odds API"
+    source_text = "Source: Pinnacle odds via The Odds API"
     source_width = draw.textlength(source_text, font=footer_font)
     draw.text(
         (EXPORT_W - LEFT_X - source_width, FOOTER_TEXT_Y),
@@ -3184,7 +3198,7 @@ def build_export_html(fixtures_to_show, selected_round, export_page, total_expor
     </main>
     <footer class="export-footer">
       <div>Graphics by <strong>FPL Cartel</strong></div>
-      <div>Source: live odds via <strong>The Odds API</strong></div>
+      <div>Source: Pinnacle odds via <strong>The Odds API</strong></div>
     </footer>
   </section>
 </body>
@@ -3207,7 +3221,14 @@ def render_team_flag(team_name):
 
 
 def render_fixture_card(row):
+    note = getattr(row, "odds_note", "") or ""
+    note_html = (
+        f'<div class="fixture-note">{escape(str(note))}</div>'
+        if note
+        else ""
+    )
     return (
+        '<div class="fixture-card-wrap">'
         '<article class="fixture-card">'
         '<div class="date-block">'
         f"<strong>{escape(row.date)}</strong><span>{escape(row.kickoff)}</span>"
@@ -3232,6 +3253,8 @@ def render_fixture_card(row):
         f'<div class="metric-cell {cs_cell_class(row.away_cs)}">{format_clean_sheet(row.away_cs)}</div>'
         "</div>"
         "</article>"
+        f"{note_html}"
+        "</div>"
     )
 
 
@@ -3384,7 +3407,7 @@ def render_export_area(fixtures):
         f"{render_fixture_groups(fixtures)}"
         '<div class="export-footer">'
         "<div>Graphics by <strong>FPL Cartel</strong></div>"
-        "<div>Source: live odds via <strong>The Odds API</strong></div>"
+        "<div>Source: Pinnacle odds via <strong>The Odds API</strong></div>"
         "</div>"
         "</section>"
     )
@@ -3397,9 +3420,13 @@ def render_desktop_dashboard():
     live_fixtures = parse_odds_response(raw_api_response)
     using_live_data = not live_fixtures.empty
 
-    status_text = "Live odds via The Odds API" if using_live_data else "Sample fallback data"
+    status_text = "Live odds via The Odds API · Pinnacle only" if using_live_data else "Sample fallback data"
     display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
     st.markdown(render_brand_header(), unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="source-note">{escape(status_text)}</div>',
+        unsafe_allow_html=True,
+    )
 
     if api_error:
         st.warning(f"Could not fetch live odds from The Odds API: {api_error}")
