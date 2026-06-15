@@ -1,8 +1,9 @@
 import os
 import math
 import base64
+import json
 import mimetypes
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from html import escape
 from io import BytesIO
 from pathlib import Path
@@ -49,6 +50,7 @@ NO_LIVE_ODDS_MESSAGE = (
     "are too far away or markets are not open."
 )
 PINNACLE_UNAVAILABLE_MESSAGE = "Pinnacle odds unavailable"
+SNAPSHOT_PATH = Path("data/odds_snapshots.json")
 USE_BROWSER_EXPORT = False
 SUBLAUNCH_URL = "https://sublaunch.com/fplcartel"
 LOGO_PATH = Path("assets/fpl-cartel-logo.png")
@@ -62,6 +64,10 @@ LOGO_CANDIDATES = [
     "cartel-logo.png",
     "FPL Cartel Logo.png",
 ]
+
+
+def make_fixture_id(commence_time, home_team, away_team):
+    return f"{commence_time or 'tbd'}::{home_team}::{away_team}"
 
 st.set_page_config(
     page_title="FPL Cartel World Cup Odds Dashboard",
@@ -665,8 +671,11 @@ def mobile_parse_odds_response(payload):
 
         rows.append(
             {
+                "fixture_id": event.get("id")
+                or make_fixture_id(commence_time, home_team, away_team),
                 "Date": dt.strftime("%a %d %b") if dt.year < 9999 else "TBD",
                 "Time": dt.strftime("%H:%M") if dt.year < 9999 else "TBD",
+                "commence_time": commence_time,
                 "Home": home_team,
                 "Home Goals": mobile_format_goals(home_goals),
                 "Home CS%": mobile_format_cs(home_cs),
@@ -1213,6 +1222,8 @@ def render_mobile_dashboard():
     )
 
     live_fixtures = mobile_parse_odds_response(mobile_api_response)
+    if not live_fixtures.empty:
+        save_odds_snapshots(live_fixtures, mobile_last_updated)
     fixtures = live_fixtures if not live_fixtures.empty else mobile_sample_fixtures()
 
     round_options = sorted(
@@ -1562,11 +1573,46 @@ DESKTOP_STYLE = (
         .metric-cell {
             border-left: 1px solid var(--line);
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
+            gap: 0.2rem;
             padding: 0.65rem 0.45rem;
             font-weight: 800;
             font-size: 22px;
+        }
+
+        .metric-value {
+            line-height: 1;
+        }
+
+        .delta-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 42px;
+            padding: 0.12rem 0.32rem;
+            border-radius: 999px;
+            font-size: 0.62rem;
+            font-weight: 900;
+            line-height: 1.1;
+            background: rgba(255, 255, 255, 0.82);
+            color: #64748b;
+        }
+
+        .delta-up {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .delta-down {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .delta-neutral {
+            background: #e2e8f0;
+            color: #64748b;
         }
 
         .cell-dark-green {
@@ -2023,6 +2069,14 @@ SAMPLE_FIXTURES["round"] = SAMPLE_FIXTURES.apply(
     ),
     axis=1,
 )
+SAMPLE_FIXTURES["fixture_id"] = SAMPLE_FIXTURES.apply(
+    lambda row: make_fixture_id(
+        row["commence_time_dt"].isoformat(),
+        row["home_team"],
+        row["away_team"],
+    ),
+    axis=1,
+)
 SAMPLE_FIXTURES["odds_note"] = ""
 
 
@@ -2116,6 +2170,8 @@ def parse_odds_response(payload):
 
         rows.append(
             {
+                "fixture_id": event.get("id")
+                or make_fixture_id(commence_time, home_team, away_team),
                 "date": date_label,
                 "kickoff": kickoff,
                 "round": get_round_for_fixture(
@@ -2158,6 +2214,163 @@ def format_clean_sheet(value):
     if value is None or pd.isna(value):
         return "-"
     return f"{int(value)}%"
+
+
+def parse_snapshot_timestamp(value):
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def load_odds_snapshots():
+    try:
+        if not SNAPSHOT_PATH.exists():
+            return []
+        data = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except (OSError, json.JSONDecodeError):
+        return []
+
+
+def write_odds_snapshots(snapshots):
+    try:
+        SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        SNAPSHOT_PATH.write_text(
+            json.dumps(snapshots, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def save_odds_snapshots(fixtures, timestamp):
+    if fixtures is None or fixtures.empty or timestamp is None:
+        return
+
+    timestamp = timestamp.astimezone(timezone.utc)
+    timestamp_text = timestamp.isoformat()
+    snapshots = load_odds_snapshots()
+    existing_keys = {
+        (
+            snapshot.get("timestamp"),
+            snapshot.get("fixture_id"),
+            snapshot.get("team"),
+        )
+        for snapshot in snapshots
+    }
+
+    new_rows = []
+    for fixture in fixtures.to_dict("records"):
+        home_team = fixture.get("home_team") or fixture.get("Home")
+        away_team = fixture.get("away_team") or fixture.get("Away")
+        fixture_id = fixture.get("fixture_id") or make_fixture_id(
+            fixture.get("commence_time") or fixture.get("commence_time_dt"),
+            home_team,
+            away_team,
+        )
+        round_name = fixture.get("round")
+        side_configs = [
+            (
+                home_team,
+                fixture.get("home_xg", fixture.get("home_goals_value")),
+                fixture.get("home_cs", fixture.get("home_cs_value")),
+            ),
+            (
+                away_team,
+                fixture.get("away_xg", fixture.get("away_goals_value")),
+                fixture.get("away_cs", fixture.get("away_cs_value")),
+            ),
+        ]
+        for team, projected_goals, clean_sheet_pct in side_configs:
+            if not team:
+                continue
+            key = (timestamp_text, fixture_id, team)
+            if key in existing_keys:
+                continue
+            new_rows.append(
+                {
+                    "timestamp": timestamp_text,
+                    "fixture_id": fixture_id,
+                    "team": team,
+                    "projected_goals": optional_float(projected_goals),
+                    "clean_sheet_pct": optional_float(clean_sheet_pct),
+                    "round": round_name,
+                }
+            )
+
+    if not new_rows:
+        return
+
+    snapshots.extend(new_rows)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
+    snapshots = [
+        snapshot
+        for snapshot in snapshots
+        if (
+            parsed := parse_snapshot_timestamp(snapshot.get("timestamp"))
+        ) is not None
+        and parsed >= cutoff
+    ]
+    write_odds_snapshots(snapshots[-20000:])
+
+
+def get_delta_for_window(fixture_id, team, current_value, metric, hours):
+    current_number = optional_float(current_value)
+    if not fixture_id or not team or current_number is None:
+        return None
+
+    now = datetime.now(timezone.utc)
+    target_time = now - timedelta(hours=hours)
+    tolerance = timedelta(hours=max(6, hours * 0.25))
+    candidates = []
+    for snapshot in load_odds_snapshots():
+        if snapshot.get("fixture_id") != fixture_id or snapshot.get("team") != team:
+            continue
+        previous_value = optional_float(snapshot.get(metric))
+        snapshot_time = parse_snapshot_timestamp(snapshot.get("timestamp"))
+        if previous_value is None or snapshot_time is None:
+            continue
+        distance = abs(snapshot_time - target_time)
+        if distance <= tolerance:
+            candidates.append((distance, previous_value))
+
+    if not candidates:
+        return None
+
+    _distance, previous_value = min(candidates, key=lambda item: item[0])
+    return current_number - previous_value
+
+
+def get_delta_24h(fixture_id, team, current_value, metric):
+    return get_delta_for_window(fixture_id, team, current_value, metric, 24)
+
+
+def format_delta(delta, metric):
+    if delta is None:
+        return "-"
+    if metric == "clean_sheet_pct":
+        return f"{delta:+.1f}%"
+    return f"{delta:+.2f}"
+
+
+def delta_badge_class(delta):
+    if delta is None or abs(delta) < 0.005:
+        return "delta-neutral"
+    return "delta-up" if delta > 0 else "delta-down"
+
+
+def render_delta_badge(delta, metric):
+    return (
+        f'<span class="delta-badge {delta_badge_class(delta)}">'
+        f'{escape(format_delta(delta, metric))}'
+        "</span>"
+    )
 
 
 ROUND_TABLE_COLUMNS = ["Round 1", "Round 2", "Round 3"]
@@ -3236,13 +3449,34 @@ def render_team_flag(team_name):
     )
 
 
-def render_fixture_card(row):
+def render_metric_cell(value, metric, class_name, delta_window, fixture_id, team):
+    delta_html = ""
+    if delta_window != "Off":
+        hours = 48 if delta_window == "48h" else 24
+        delta = get_delta_for_window(fixture_id, team, value, metric, hours)
+        delta_html = render_delta_badge(delta, metric)
+
+    value_text = (
+        format_clean_sheet(value)
+        if metric == "clean_sheet_pct"
+        else format_projected_goals(value)
+    )
+    return (
+        f'<div class="metric-cell {class_name}">'
+        f'<span class="metric-value">{escape(value_text)}</span>'
+        f"{delta_html}"
+        "</div>"
+    )
+
+
+def render_fixture_card(row, delta_window="Off"):
     note = getattr(row, "odds_note", "") or ""
     note_html = (
         f'<div class="fixture-note">{escape(str(note))}</div>'
         if note
         else ""
     )
+    fixture_id = getattr(row, "fixture_id", "")
     return (
         '<div class="fixture-card-wrap">'
         '<article class="fixture-card">'
@@ -3260,13 +3494,13 @@ def render_fixture_card(row):
         "</div></div>"
         '<div class="projection-col">'
         '<div class="metric-head">Proj goals</div>'
-        f'<div class="metric-cell {goal_cell_class(row.home_xg)}">{format_projected_goals(row.home_xg)}</div>'
-        f'<div class="metric-cell {goal_cell_class(row.away_xg)}">{format_projected_goals(row.away_xg)}</div>'
+        f'{render_metric_cell(row.home_xg, "projected_goals", goal_cell_class(row.home_xg), delta_window, fixture_id, row.home_team)}'
+        f'{render_metric_cell(row.away_xg, "projected_goals", goal_cell_class(row.away_xg), delta_window, fixture_id, row.away_team)}'
         "</div>"
         '<div class="clean-col">'
         '<div class="metric-head">Clean sheet</div>'
-        f'<div class="metric-cell {cs_cell_class(row.home_cs)}">{format_clean_sheet(row.home_cs)}</div>'
-        f'<div class="metric-cell {cs_cell_class(row.away_cs)}">{format_clean_sheet(row.away_cs)}</div>'
+        f'{render_metric_cell(row.home_cs, "clean_sheet_pct", cs_cell_class(row.home_cs), delta_window, fixture_id, row.home_team)}'
+        f'{render_metric_cell(row.away_cs, "clean_sheet_pct", cs_cell_class(row.away_cs), delta_window, fixture_id, row.away_team)}'
         "</div>"
         "</article>"
         f"{note_html}"
@@ -3274,11 +3508,12 @@ def render_fixture_card(row):
     )
 
 
-def render_fixture_groups(fixtures):
+def render_fixture_groups(fixtures, delta_window="Off"):
     groups_html = []
     for date, date_fixtures in fixtures.groupby("date", sort=False):
         cards = "\n".join(
-            render_fixture_card(row) for row in date_fixtures.itertuples(index=False)
+            render_fixture_card(row, delta_window)
+            for row in date_fixtures.itertuples(index=False)
         )
         groups_html.append(
             '<section class="date-group">'
@@ -3417,10 +3652,10 @@ def render_top_teams_section(fixtures):
         )
 
 
-def render_export_area(fixtures):
+def render_export_area(fixtures, delta_window="Off"):
     return (
         '<section class="export-area">'
-        f"{render_fixture_groups(fixtures)}"
+        f"{render_fixture_groups(fixtures, delta_window)}"
         '<div class="export-footer">'
         "<div>Graphics by <strong>FPL Cartel</strong></div>"
         "<div>Source: Pinnacle odds via <strong>The Odds API</strong></div>"
@@ -3435,6 +3670,8 @@ def render_desktop_dashboard():
     raw_api_response, api_error, _api_status_code, last_updated = fetch_world_cup_odds()
     live_fixtures = parse_odds_response(raw_api_response)
     using_live_data = not live_fixtures.empty
+    if using_live_data:
+        save_odds_snapshots(live_fixtures, last_updated)
 
     status_text = "Live odds via The Odds API · Pinnacle only" if using_live_data else "Sample fallback data"
     display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
@@ -3455,7 +3692,7 @@ def render_desktop_dashboard():
         st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
 
     fixture_options = display_fixtures["fixture_set"].drop_duplicates().tolist()
-    control_cols = st.columns([1.2, 1.1, 1.2])
+    control_cols = st.columns([1.05, 1.05, 0.95, 1.2])
 
     with control_cols[0]:
         fixture_set = st.segmented_control(
@@ -3488,10 +3725,17 @@ def render_desktop_dashboard():
             index=default_round_index,
         )
 
+    with control_cols[2]:
+        delta_window = st.selectbox(
+            "Delta window",
+            ["Off", "24h", "48h"],
+            index=0,
+        )
+
     filtered = display_fixtures[display_fixtures["fixture_set"] == fixture_set]
     filtered = filtered[filtered["round"] == selected_round]
 
-    with control_cols[2]:
+    with control_cols[3]:
         export_page_size = 10
         total_export_pages = max(1, math.ceil(len(filtered) / export_page_size))
         export_page_options = [
@@ -3531,7 +3775,7 @@ def render_desktop_dashboard():
             unsafe_allow_html=True,
         )
     else:
-        st.markdown(render_export_area(filtered), unsafe_allow_html=True)
+        st.markdown(render_export_area(filtered, delta_window), unsafe_allow_html=True)
 
     top_team_fixtures = display_fixtures[
         display_fixtures["fixture_set"] == fixture_set
