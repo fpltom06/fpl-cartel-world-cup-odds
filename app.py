@@ -180,6 +180,16 @@ def get_logo_src():
     return f"data:{mime_type};base64,{data}"
 
 
+def format_last_updated(timestamp):
+    if not timestamp:
+        return ""
+
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    timestamp = timestamp.astimezone(timezone.utc)
+    return f"Last updated: {timestamp.strftime('%d %b %Y %H:%M UTC')}"
+
+
 def render_brand_header():
     logo_src = get_logo_src()
     return f"""
@@ -617,7 +627,7 @@ def mobile_cs_cell_class(value):
 def fetch_world_cup_odds_mobile():
     api_key = ODDS_API_KEY
     if not api_key or api_key == "your_api_key_here":
-        return []
+        return [], None
 
     params = {
         "apiKey": api_key,
@@ -630,10 +640,10 @@ def fetch_world_cup_odds_mobile():
     try:
         response = requests.get(ODDS_API_URL, params=params, timeout=12)
         if response.status_code != 200:
-            return []
-        return response.json()
+            return [], None
+        return response.json(), datetime.now(timezone.utc)
     except (requests.RequestException, ValueError):
-        return []
+        return [], None
 
 
 def mobile_parse_odds_response(payload):
@@ -1191,12 +1201,18 @@ def render_mobile_dashboard():
         render_brand_header(),
         unsafe_allow_html=True,
     )
+    mobile_api_response, mobile_last_updated = fetch_world_cup_odds_mobile()
+    mobile_updated_text = format_last_updated(mobile_last_updated)
+    mobile_source_note = (
+        "Live odds via The Odds API &middot; Pinnacle only"
+        + (f"<br>{escape(mobile_updated_text)}" if mobile_updated_text else "")
+    )
     st.markdown(
-        '<div class="source-note">Live odds via The Odds API &middot; Pinnacle only</div>',
+        f'<div class="source-note">{mobile_source_note}</div>',
         unsafe_allow_html=True,
     )
 
-    live_fixtures = mobile_parse_odds_response(fetch_world_cup_odds_mobile())
+    live_fixtures = mobile_parse_odds_response(mobile_api_response)
     fixtures = live_fixtures if not live_fixtures.empty else mobile_sample_fixtures()
 
     round_options = sorted(
@@ -1868,7 +1884,7 @@ def desktop_styles():
 def fetch_world_cup_odds():
     api_key = ODDS_API_KEY
     if not api_key or api_key == "your_api_key_here":
-        return [], None, None
+        return [], None, None, None
 
     params = {
         "apiKey": api_key,
@@ -1882,13 +1898,13 @@ def fetch_world_cup_odds():
         response = requests.get(ODDS_API_URL, params=params, timeout=12)
         status_code = response.status_code
         if status_code != 200:
-            return [], f"The Odds API returned status code {status_code}.", status_code
-        return response.json(), None, status_code
+            return [], f"The Odds API returned status code {status_code}.", status_code, None
+        return response.json(), None, status_code, datetime.now(timezone.utc)
     except requests.RequestException as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", None)
-        return [], str(exc), status_code
+        return [], str(exc), status_code, None
     except ValueError:
-        return [], "The Odds API returned a response that was not valid JSON.", None
+        return [], "The Odds API returned a response that was not valid JSON.", None, None
 
 
 def team_badge(team_name):
@@ -3416,15 +3432,19 @@ def render_export_area(fixtures):
 def render_desktop_dashboard():
     desktop_styles()
 
-    raw_api_response, api_error, _api_status_code = fetch_world_cup_odds()
+    raw_api_response, api_error, _api_status_code, last_updated = fetch_world_cup_odds()
     live_fixtures = parse_odds_response(raw_api_response)
     using_live_data = not live_fixtures.empty
 
     status_text = "Live odds via The Odds API · Pinnacle only" if using_live_data else "Sample fallback data"
     display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
+    last_updated_text = format_last_updated(last_updated)
+    source_note = status_text + (
+        f"<br>{escape(last_updated_text)}" if last_updated_text else ""
+    )
     st.markdown(render_brand_header(), unsafe_allow_html=True)
     st.markdown(
-        f'<div class="source-note">{escape(status_text)}</div>',
+        f'<div class="source-note">{source_note}</div>',
         unsafe_allow_html=True,
     )
 
