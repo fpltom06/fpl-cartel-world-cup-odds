@@ -2677,7 +2677,7 @@ def build_team_round_rows(fixtures):
 
 
 def metric_title(metric_key):
-    return "Projected Goals" if metric_key == "projected_goals" else "Clean Sheets"
+    return "Projected Goals" if metric_key == "projected_goals" else "Clean Sheet %"
 
 
 def metric_total_label(metric_key):
@@ -2692,6 +2692,10 @@ def format_leaderboard_value(value, metric_key):
     if metric_key == "projected_goals":
         return format_projected_goals(value)
     return format_clean_sheet(value)
+
+
+def leaderboard_export_metric_header(metric_key):
+    return "Projected Goals" if metric_key == "projected_goals" else "Clean Sheet %"
 
 
 def build_leaderboard_rows(fixtures, metric_key, selected_rounds, top_n=10):
@@ -3007,12 +3011,10 @@ def build_leaderboard_image(
     table_right = EXPORT_W - MARGIN_X
     table_w = table_right - table_left
     rank_w = 72
-    team_w = 275 if len(selected_rounds) > 1 else 330
-    total_w = 150 if show_leaderboard_total(metric_key) else 0
-    md_w = (table_w - rank_w - team_w - total_w) / max(1, len(selected_rounds))
-    col_widths = [rank_w, team_w] + [md_w] * len(selected_rounds)
-    if show_leaderboard_total(metric_key):
-        col_widths.append(total_w)
+    team_w = 330
+    total_w = 150
+    metric_w = table_w - rank_w - team_w - total_w
+    col_widths = [rank_w, team_w, metric_w, total_w]
     table_h = HEADER_H + min(10, len(rows)) * ROW_H
 
     draw.rounded_rectangle(
@@ -3032,11 +3034,12 @@ def build_leaderboard_image(
         fill=hex_to_rgb("#f5f7fa"),
     )
 
-    headers = ["Rank", "Team"] + [
-        ROUND_TO_MD.get(round_name, round_name) for round_name in selected_rounds
+    headers = [
+        "Rank",
+        "Team",
+        leaderboard_export_metric_header(metric_key),
+        "Total",
     ]
-    if show_leaderboard_total(metric_key):
-        headers.append(metric_total_label(metric_key))
     x = table_left
     for header, width in zip(headers, col_widths):
         draw_text_center(
@@ -3078,12 +3081,20 @@ def build_leaderboard_image(
         )
         x += team_w
 
-        for round_name in selected_rounds:
-            cell = row["rounds"].get(round_name)
-            if cell:
+        metric_cells = [
+            row["rounds"].get(round_name)
+            for round_name in selected_rounds
+            if row["rounds"].get(round_name)
+        ]
+        if metric_cells:
+            visible_cells = metric_cells[:3]
+            sub_w = metric_w / len(visible_cells)
+            for cell_index, cell in enumerate(visible_cells):
+                cell_left = x + (cell_index * sub_w)
+                cell_right = cell_left + sub_w
                 draw_wrapped_text_center(
                     draw,
-                    (x + 10, row_top + 9, x + md_w - 10, row_top + 50),
+                    (cell_left + 10, row_top + 9, cell_right - 10, row_top + 50),
                     cell["opponent"],
                     opponent_font,
                     hex_to_rgb("#111827"),
@@ -3092,29 +3103,28 @@ def build_leaderboard_image(
                 )
                 draw_text_center(
                     draw,
-                    (x, row_top + 50, x + md_w, row_bottom - 6),
+                    (cell_left, row_top + 50, cell_right, row_bottom - 6),
                     format_leaderboard_value(cell[metric_key], metric_key),
                     value_font,
                     hex_to_rgb("#0f7a45"),
                 )
-            else:
-                draw_text_center(
-                    draw,
-                    (x, row_top, x + md_w, row_bottom),
-                    "-",
-                    value_font,
-                    hex_to_rgb("#94a3b8"),
-                )
-            x += md_w
-
-        if show_leaderboard_total(metric_key):
+        else:
             draw_text_center(
                 draw,
-                (x, row_top, x + total_w, row_bottom),
-                format_leaderboard_value(row["total"], metric_key),
-                total_font,
-                hex_to_rgb("#0f7a45"),
+                (x, row_top, x + metric_w, row_bottom),
+                "-",
+                value_font,
+                hex_to_rgb("#94a3b8"),
             )
+        x += metric_w
+
+        draw_text_center(
+            draw,
+            (x, row_top, x + total_w, row_bottom),
+            format_leaderboard_value(row["total"], metric_key),
+            total_font,
+            hex_to_rgb("#0f7a45"),
+        )
 
     x = table_left
     for width in col_widths[:-1]:
