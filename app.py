@@ -4,6 +4,7 @@ import base64
 import mimetypes
 import re
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from html import escape
 from io import BytesIO
 from pathlib import Path
@@ -1390,6 +1391,11 @@ def render_mobile_dashboard():
             index=gw_options.index(default_gw) if default_gw in gw_options else 0,
         )
         fixtures_to_show = filter_by_gameweek(fixtures, selected_gameweek)
+        if fixtures_to_show.empty and selected_gameweek.startswith("GW"):
+            st.warning(
+                f"No {selected_gameweek} matches could be linked to FPL fixtures. "
+                "Use All priced fixtures to inspect returned odds."
+            )
     page_size = 8
     max_pages = max(1, math.ceil(len(fixtures_to_show) / page_size))
     page_options = [f"Page {page_number}" for page_number in range(1, max_pages + 1)]
@@ -2227,12 +2233,39 @@ PL_TEAM_ALIASES = {
 }
 
 
+TEAM_NAME_ALIASES = {
+    "Man United": "Manchester United",
+    "Manchester Utd": "Manchester United",
+    "Man Utd": "Manchester United",
+    "Spurs": "Tottenham Hotspur",
+    "Tottenham": "Tottenham Hotspur",
+    "Nott'm Forest": "Nottingham Forest",
+    "Nottingham Forest": "Nottingham Forest",
+    "Brighton": "Brighton & Hove Albion",
+    "Wolves": "Wolverhampton Wanderers",
+    "West Ham": "West Ham United",
+    "Newcastle": "Newcastle United",
+    "Leeds": "Leeds United",
+    "Man City": "Manchester City",
+    "Bournemouth": "AFC Bournemouth",
+}
+
+
 def normalize_pl_team_name(team_name):
-    clean = str(team_name or "").lower()
+    canonical = TEAM_NAME_ALIASES.get(str(team_name or "").strip(), team_name)
+    clean = str(canonical or "").lower()
     clean = clean.replace("&", " and ")
     clean = re.sub(r"[^a-z0-9]+", " ", clean).strip()
     clean = re.sub(r"\s+", " ", clean)
     return PL_TEAM_ALIASES.get(clean, clean)
+
+
+def pl_team_similarity(left, right):
+    return SequenceMatcher(
+        None,
+        normalize_pl_team_name(left),
+        normalize_pl_team_name(right),
+    ).ratio()
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -2258,7 +2291,10 @@ def fetch_fpl_fixture_schedule():
             rows.append(
                 {
                     "gameweek": int(gameweek),
+                    "kickoff_dt": kickoff_dt,
                     "fixture_date": kickoff_dt.date().isoformat(),
+                    "home_team": home_team,
+                    "away_team": away_team,
                     "home_norm": normalize_pl_team_name(home_team),
                     "away_norm": normalize_pl_team_name(away_team),
                 }
@@ -2266,42 +2302,100 @@ def fetch_fpl_fixture_schedule():
         return pd.DataFrame(rows)
     except (requests.RequestException, ValueError, KeyError, TypeError):
         return pd.DataFrame(
-            columns=["gameweek", "fixture_date", "home_norm", "away_norm"]
+            columns=[
+                "gameweek",
+                "kickoff_dt",
+                "fixture_date",
+                "home_team",
+                "away_team",
+                "home_norm",
+                "away_norm",
+            ]
         )
+
+
+def match_premier_league_fixture(fixture, schedule):
+    home_team = fixture.get("home_team") or fixture.get("Home")
+    away_team = fixture.get("away_team") or fixture.get("Away")
+    kickoff_dt = fixture.get("commence_time_dt")
+    if kickoff_dt is None or schedule.empty:
+        return None
+
+    best_match = None
+    best_score = 0
+    for candidate in schedule.to_dict("records"):
+        day_gap = abs((kickoff_dt.date() - candidate["kickoff_dt"].date()).days)
+        if day_gap > 2:
+            continue
+
+        home_score = pl_team_similarity(home_team, candidate["home_team"])
+        away_score = pl_team_similarity(away_team, candidate["away_team"])
+        team_score = (home_score + away_score) / 2
+        date_score = max(0, 1 - (day_gap / 2))
+        score = (team_score * 0.85) + (date_score * 0.15)
+        if score > best_score:
+            best_score = score
+            best_match = candidate
+
+    if not best_match or best_score < 0.78:
+        return None
+
+    return {
+        "gameweek": int(best_match["gameweek"]),
+        "fpl_event": (
+            f'GW{int(best_match["gameweek"])}: '
+            f'{best_match["home_team"]} vs {best_match["away_team"]}'
+        ),
+        "confidence": round(best_score * 100),
+    }
 
 
 def add_premier_league_gameweeks(fixtures):
     if fixtures.empty:
         fixtures["gameweek"] = pd.Series(dtype="float")
+        fixtures["gameweek_label"] = pd.Series(dtype="object")
+        fixtures["matched_fpl_event"] = pd.Series(dtype="object")
+        fixtures["match_confidence"] = pd.Series(dtype="float")
         return fixtures
 
     schedule = fetch_fpl_fixture_schedule()
     fixtures = fixtures.copy()
     fixtures["gameweek"] = None
+    fixtures["gameweek_label"] = "Unmatched / Upcoming"
+    fixtures["matched_fpl_event"] = "Unmatched / Upcoming"
+    fixtures["match_confidence"] = 0
     if schedule.empty:
         return fixtures
 
-    lookup = {
-        (row.home_norm, row.away_norm, row.fixture_date): row.gameweek
-        for row in schedule.itertuples(index=False)
-    }
     gameweeks = []
+    labels = []
+    events = []
+    confidences = []
     for fixture in fixtures.to_dict("records"):
-        home_team = fixture.get("home_team") or fixture.get("Home")
-        away_team = fixture.get("away_team") or fixture.get("Away")
-        key = (
-            normalize_pl_team_name(home_team),
-            normalize_pl_team_name(away_team),
-            fixture["commence_time_dt"].date().isoformat(),
-        )
-        gameweeks.append(lookup.get(key))
+        match = match_premier_league_fixture(fixture, schedule)
+        if match:
+            label = f"GW{match['gameweek']}"
+            gameweeks.append(match["gameweek"])
+            labels.append(label)
+            events.append(match["fpl_event"])
+            confidences.append(match["confidence"])
+        else:
+            gameweeks.append(None)
+            labels.append("Unmatched / Upcoming")
+            events.append("Unmatched / Upcoming")
+            confidences.append(0)
 
     fixtures["gameweek"] = gameweeks
+    fixtures["gameweek_label"] = labels
+    fixtures["matched_fpl_event"] = events
+    fixtures["match_confidence"] = confidences
     return fixtures
 
 
 def gameweek_options():
-    return [f"GW{gameweek}" for gameweek in range(1, 39)]
+    return ["All priced fixtures"] + [
+        f"GW{gameweek}" for gameweek in range(1, 39)
+    ] + ["Unmatched / Upcoming"]
 
 
 def default_gameweek(fixtures):
@@ -2315,6 +2409,10 @@ def default_gameweek(fixtures):
 
 
 def filter_by_gameweek(fixtures, selected_gameweek):
+    if selected_gameweek == "All priced fixtures":
+        return fixtures
+    if selected_gameweek == "Unmatched / Upcoming":
+        return fixtures[fixtures["gameweek"].isna()]
     try:
         gameweek = int(str(selected_gameweek).replace("GW", ""))
     except ValueError:
@@ -3835,6 +3933,9 @@ def build_fixture_debug_table(fixtures):
             {
                 "Date": fixture.get("date", ""),
                 "Kickoff": fixture.get("kickoff", ""),
+                "Odds API home_team": fixture.get("home_team", ""),
+                "Odds API away_team": fixture.get("away_team", ""),
+                "commence_time": fixture.get("commence_time", ""),
                 "Fixture": (
                     f'{fixture.get("home_team", "")} vs '
                     f'{fixture.get("away_team", "")}'
@@ -3843,6 +3944,17 @@ def build_fixture_debug_table(fixtures):
                 "Gameweek": (
                     f"GW{int(fixture['gameweek'])}"
                     if pd.notna(fixture.get("gameweek"))
+                    else ""
+                ),
+                "matched FPL event": fixture.get("matched_fpl_event", ""),
+                "matched GW": (
+                    f"GW{int(fixture['gameweek'])}"
+                    if pd.notna(fixture.get("gameweek"))
+                    else "Unmatched / Upcoming"
+                ),
+                "match confidence": (
+                    f'{int(fixture.get("match_confidence", 0))}%'
+                    if fixture.get("match_confidence") is not None
                     else ""
                 ),
                 "Bookmaker": fixture.get("bookmaker_used", "Sample"),
@@ -3904,6 +4016,7 @@ def render_competition_dashboard(selected_competition):
         )
 
     filtered = display_fixtures[display_fixtures["fixture_set"] == fixture_set]
+    debug_fixtures = filtered
     if selected_competition == "World Cup":
         available_rounds = filtered["round"].drop_duplicates().tolist()
         round_options = sorted(available_rounds, key=round_sort_key)
@@ -3934,6 +4047,11 @@ def render_competition_dashboard(selected_competition):
                 key=f"{selected_competition}_gameweek",
             )
         filtered = filter_by_gameweek(filtered, selected_filter)
+        if filtered.empty and selected_filter.startswith("GW"):
+            st.warning(
+                f"No {selected_filter} matches could be linked to FPL fixtures. "
+                "Use All priced fixtures to inspect returned odds."
+            )
 
     with control_cols[2]:
         neutral_label = "On" if competition_config["neutral"] else "Off"
@@ -4001,8 +4119,15 @@ def render_competition_dashboard(selected_competition):
     )
 
     with st.expander("Fixture model debug", expanded=False):
+        if selected_competition == "Premier League":
+            st.caption(
+                "Premier League GW matching debug: Odds API teams, commence_time, "
+                "matched FPL event, matched GW, and match confidence."
+            )
         st.dataframe(
-            build_fixture_debug_table(filtered),
+            build_fixture_debug_table(
+                debug_fixtures if selected_competition == "Premier League" else filtered
+            ),
             use_container_width=True,
             hide_index=True,
         )
