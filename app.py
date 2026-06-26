@@ -1,9 +1,9 @@
 import os
 import math
 import base64
-import json
 import mimetypes
-from datetime import datetime, timezone, timedelta
+import re
+from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
 from pathlib import Path
@@ -50,7 +50,6 @@ NO_LIVE_ODDS_MESSAGE = (
     "are too far away or markets are not open."
 )
 PINNACLE_UNAVAILABLE_MESSAGE = "Pinnacle odds unavailable"
-SNAPSHOT_PATH = Path("data/odds_snapshots.json")
 USE_BROWSER_EXPORT = False
 SUBLAUNCH_URL = "https://sublaunch.com/fplcartel"
 LOGO_PATH = Path("assets/fpl-cartel-logo.png")
@@ -487,6 +486,24 @@ def mobile_extract_market(bookmaker, market_key):
     return {}
 
 
+def implied_prob(decimal_odds):
+    try:
+        odds = float(decimal_odds)
+    except (TypeError, ValueError):
+        return None
+    if odds <= 1:
+        return None
+    return 1 / odds
+
+
+def normalize_probs(probs):
+    clean_probs = [prob for prob in probs if prob is not None and prob > 0]
+    total = sum(clean_probs)
+    if total <= 0:
+        return []
+    return [prob / total for prob in clean_probs]
+
+
 def is_pinnacle_bookmaker(bookmaker):
     key = str(bookmaker.get("key", "")).lower()
     title = str(bookmaker.get("title", "")).lower()
@@ -500,6 +517,183 @@ def find_pinnacle_bookmaker(event):
     return None
 
 
+def extract_h2h_probabilities(bookmaker, home_team, away_team):
+    market = extract_market(bookmaker, "h2h")
+    outcomes = market.get("outcomes", [])
+    probs = []
+    names = []
+    for outcome in outcomes:
+        name = outcome.get("name")
+        prob = implied_prob(outcome.get("price"))
+        if name and prob is not None:
+            names.append(name)
+            probs.append(prob)
+
+    fair_probs = normalize_probs(probs)
+    if not fair_probs:
+        return None
+
+    return {
+        names[index]: fair_probs[index]
+        for index in range(min(len(names), len(fair_probs)))
+    }
+
+
+def extract_btts_probability(bookmaker):
+    market = extract_market(bookmaker, "btts")
+    yes_prob = None
+    no_prob = None
+    for outcome in market.get("outcomes", []):
+        name = str(outcome.get("name", "")).lower()
+        prob = implied_prob(outcome.get("price"))
+        if prob is None:
+            continue
+        if name in {"yes", "both teams to score - yes", "btts yes"}:
+            yes_prob = prob
+        elif name in {"no", "both teams to score - no", "btts no"}:
+            no_prob = prob
+
+    fair_probs = normalize_probs([yes_prob, no_prob])
+    if len(fair_probs) != 2:
+        return None
+    return fair_probs[0]
+
+
+def parse_scoreline(outcome):
+    parts = [
+        str(outcome.get(key, ""))
+        for key in ("name", "description")
+        if outcome.get(key)
+    ]
+    text = " ".join(parts)
+    match = re.search(r"(\d+)\s*[-:]\s*(\d+)", text)
+    if not match:
+        return None
+    return int(match.group(1)), int(match.group(2))
+
+
+def extract_correct_score_projection(bookmaker):
+    market = extract_market(bookmaker, "correct_score")
+    score_probs = []
+    for outcome in market.get("outcomes", []):
+        scoreline = parse_scoreline(outcome)
+        prob = implied_prob(outcome.get("price"))
+        if scoreline is None or prob is None:
+            continue
+        score_probs.append((scoreline[0], scoreline[1], prob))
+
+    fair_probs = normalize_probs([prob for _home, _away, prob in score_probs])
+    if not fair_probs:
+        return None, None
+
+    home_score_xg = sum(
+        score_probs[index][0] * fair_probs[index]
+        for index in range(len(fair_probs))
+    )
+    away_score_xg = sum(
+        score_probs[index][1] * fair_probs[index]
+        for index in range(len(fair_probs))
+    )
+    return home_score_xg, away_score_xg
+
+
+def apply_correct_score_blend(home_goals, away_goals, bookmaker):
+    score_home, score_away = extract_correct_score_projection(bookmaker)
+    if score_home is None or score_away is None:
+        return home_goals, away_goals, False
+    return (
+        (home_goals * 0.75) + (score_home * 0.25),
+        (away_goals * 0.75) + (score_away * 0.25),
+        True,
+    )
+
+
+def apply_h2h_calibration(home_goals, away_goals, bookmaker, home_team, away_team):
+    h2h_probs = extract_h2h_probabilities(bookmaker, home_team, away_team)
+    if not h2h_probs:
+        return home_goals, away_goals, False
+
+    home_prob = h2h_probs.get(home_team)
+    away_prob = h2h_probs.get(away_team)
+    if home_prob is None or away_prob is None:
+        return home_goals, away_goals, False
+
+    market_edge = home_prob - away_prob
+    model_edge = math.tanh((home_goals - away_goals) / 1.5) * 0.45
+    adjustment = max(-0.08, min(0.08, (market_edge - model_edge) * 0.08))
+    return (
+        max(0.05, home_goals + adjustment),
+        max(0.05, away_goals - adjustment),
+        True,
+    )
+
+
+def apply_btts_calibration(home_goals, away_goals, bookmaker):
+    btts_prob = extract_btts_probability(bookmaker)
+    if btts_prob is None:
+        return home_goals, away_goals, False
+
+    poisson_btts = (1 - math.exp(-home_goals)) * (1 - math.exp(-away_goals))
+    adjustment = max(-0.10, min(0.10, (btts_prob - poisson_btts) * 0.25))
+    return (
+        max(0.05, home_goals + adjustment),
+        max(0.05, away_goals + adjustment),
+        True,
+    )
+
+
+def project_goals_from_event(event):
+    home_team = event.get("home_team")
+    away_team = event.get("away_team")
+    debug = {
+        "bookmaker_used": "Pinnacle",
+        "total_line": None,
+        "spread_line": None,
+        "h2h_used": False,
+        "btts_used": False,
+        "correct_score_used": False,
+    }
+    if not home_team:
+        return None, None, debug
+
+    bookmaker = find_pinnacle_bookmaker(event)
+    if not bookmaker:
+        debug["bookmaker_used"] = "Unavailable"
+        return None, None, debug
+
+    total_line = extract_total(bookmaker)
+    home_spread = extract_spread(bookmaker, home_team)
+    debug["total_line"] = total_line
+    debug["spread_line"] = home_spread
+    debug["h2h_used"] = False
+
+    home_goals, away_goals = calculate_team_goal_projections(total_line, home_spread)
+    if home_goals is None or away_goals is None:
+        return None, None, debug
+
+    home_goals, away_goals, h2h_used = apply_h2h_calibration(
+        home_goals,
+        away_goals,
+        bookmaker,
+        home_team,
+        away_team,
+    )
+    home_goals, away_goals, correct_score_used = apply_correct_score_blend(
+        home_goals,
+        away_goals,
+        bookmaker,
+    )
+    home_goals, away_goals, btts_used = apply_btts_calibration(
+        home_goals,
+        away_goals,
+        bookmaker,
+    )
+    debug["h2h_used"] = h2h_used
+    debug["correct_score_used"] = correct_score_used
+    debug["btts_used"] = btts_used
+    return home_goals, away_goals, debug
+
+
 def mobile_extract_total_and_spread(event):
     home_team = event.get("home_team")
     if not home_team:
@@ -509,23 +703,7 @@ def mobile_extract_total_and_spread(event):
     if not bookmaker:
         return None, None
 
-    total = None
-    total_market = mobile_extract_market(bookmaker, "totals")
-    for outcome in total_market.get("outcomes", []):
-        point = outcome.get("point")
-        if isinstance(point, (int, float)):
-            total = float(point)
-            break
-
-    spread = None
-    spread_market = mobile_extract_market(bookmaker, "spreads")
-    for outcome in spread_market.get("outcomes", []):
-        point = outcome.get("point")
-        if outcome.get("name") == home_team and isinstance(point, (int, float)):
-            spread = float(point)
-            break
-
-    return total, spread
+    return extract_total(bookmaker), extract_spread(bookmaker, home_team)
 
 
 def mobile_goal_projection(total_line, home_spread):
@@ -645,7 +823,7 @@ def fetch_world_cup_odds_mobile():
     params = {
         "apiKey": api_key,
         "regions": "uk,eu",
-        "markets": "h2h,totals,spreads",
+        "markets": "h2h,totals,spreads,btts,correct_score",
         "oddsFormat": "decimal",
         "dateFormat": "iso",
     }
@@ -666,8 +844,9 @@ def mobile_parse_odds_response(payload):
         dt = mobile_parse_datetime(commence_time)
         home_team = event.get("home_team", "Home team")
         away_team = event.get("away_team", "Away team")
-        total_line, home_spread = mobile_extract_total_and_spread(event)
-        home_goals, away_goals = mobile_goal_projection(total_line, home_spread)
+        home_goals, away_goals, debug = project_goals_from_event(event)
+        total_line = debug["total_line"]
+        home_spread = debug["spread_line"]
         home_cs = round(math.exp(-away_goals) * 100) if away_goals is not None else None
         away_cs = round(math.exp(-home_goals) * 100) if home_goals is not None else None
         odds_note = (
@@ -1229,8 +1408,6 @@ def render_mobile_dashboard():
     )
 
     live_fixtures = mobile_parse_odds_response(mobile_api_response)
-    if not live_fixtures.empty:
-        save_odds_snapshots(live_fixtures, mobile_last_updated)
     fixtures = live_fixtures if not live_fixtures.empty else mobile_sample_fixtures()
 
     round_options = sorted(
@@ -1593,35 +1770,6 @@ DESKTOP_STYLE = (
             line-height: 1;
         }
 
-        .delta-badge {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            min-width: 42px;
-            padding: 0.12rem 0.32rem;
-            border-radius: 999px;
-            font-size: 0.62rem;
-            font-weight: 900;
-            line-height: 1.1;
-            background: rgba(255, 255, 255, 0.82);
-            color: #64748b;
-        }
-
-        .delta-up {
-            background: #dcfce7;
-            color: #166534;
-        }
-
-        .delta-down {
-            background: #fee2e2;
-            color: #991b1b;
-        }
-
-        .delta-neutral {
-            background: #e2e8f0;
-            color: #64748b;
-        }
-
         .cell-dark-green {
             background: #28531d;
             color: #ffffff;
@@ -1942,7 +2090,7 @@ def fetch_world_cup_odds():
     params = {
         "apiKey": api_key,
         "regions": "uk,eu",
-        "markets": "h2h,totals,spreads",
+        "markets": "h2h,totals,spreads,btts,correct_score",
         "oddsFormat": "decimal",
         "dateFormat": "iso",
     }
@@ -2123,8 +2271,27 @@ def extract_market(bookmaker, market_key):
     return {}
 
 
+def extract_over_under_probabilities(bookmaker):
+    market = extract_market(bookmaker, "totals")
+    names = []
+    probs = []
+    for outcome in market.get("outcomes", []):
+        prob = implied_prob(outcome.get("price"))
+        name = outcome.get("name")
+        if prob is not None and name:
+            names.append(name)
+            probs.append(prob)
+
+    fair_probs = normalize_probs(probs)
+    return {
+        names[index]: fair_probs[index]
+        for index in range(min(len(names), len(fair_probs)))
+    }
+
+
 def extract_total(bookmaker):
     market = extract_market(bookmaker, "totals")
+    _fair_over_under_probs = extract_over_under_probabilities(bookmaker)
     for outcome in market.get("outcomes", []):
         point = outcome.get("point")
         if isinstance(point, (int, float)):
@@ -2187,8 +2354,9 @@ def parse_odds_response(payload):
         commence_time_dt = parse_commence_datetime(commence_time)
         home_team = event.get("home_team", "Home team")
         away_team = event.get("away_team", "Away team")
-        total_line, home_spread = extract_total_and_home_spread(event)
-        home_xg, away_xg = calculate_team_goal_projections(total_line, home_spread)
+        home_xg, away_xg, debug = project_goals_from_event(event)
+        total_line = debug["total_line"]
+        home_spread = debug["spread_line"]
         odds_note = (
             PINNACLE_UNAVAILABLE_MESSAGE
             if total_line is None or home_spread is None
@@ -2219,6 +2387,10 @@ def parse_odds_response(payload):
                 "away_cs": calculate_clean_sheet_percent(home_xg),
                 "total_line": total_line,
                 "home_spread": home_spread,
+                "bookmaker_used": debug["bookmaker_used"],
+                "h2h_used": debug["h2h_used"],
+                "btts_used": debug["btts_used"],
+                "correct_score_used": debug["correct_score_used"],
                 "odds_note": odds_note,
                 "delta": "Live odds",
                 "source": "api",
@@ -2241,163 +2413,6 @@ def format_clean_sheet(value):
     if value is None or pd.isna(value):
         return "-"
     return f"{int(value)}%"
-
-
-def parse_snapshot_timestamp(value):
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def load_odds_snapshots():
-    try:
-        if not SNAPSHOT_PATH.exists():
-            return []
-        data = json.loads(SNAPSHOT_PATH.read_text(encoding="utf-8"))
-        return data if isinstance(data, list) else []
-    except (OSError, json.JSONDecodeError):
-        return []
-
-
-def write_odds_snapshots(snapshots):
-    try:
-        SNAPSHOT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SNAPSHOT_PATH.write_text(
-            json.dumps(snapshots, indent=2),
-            encoding="utf-8",
-        )
-    except OSError:
-        pass
-
-
-def save_odds_snapshots(fixtures, timestamp):
-    if fixtures is None or fixtures.empty or timestamp is None:
-        return
-
-    timestamp = timestamp.astimezone(timezone.utc)
-    timestamp_text = timestamp.isoformat()
-    snapshots = load_odds_snapshots()
-    existing_keys = {
-        (
-            snapshot.get("timestamp"),
-            snapshot.get("fixture_id"),
-            snapshot.get("team"),
-        )
-        for snapshot in snapshots
-    }
-
-    new_rows = []
-    for fixture in fixtures.to_dict("records"):
-        home_team = fixture.get("home_team") or fixture.get("Home")
-        away_team = fixture.get("away_team") or fixture.get("Away")
-        fixture_id = fixture.get("fixture_id") or make_fixture_id(
-            fixture.get("commence_time") or fixture.get("commence_time_dt"),
-            home_team,
-            away_team,
-        )
-        round_name = fixture.get("round")
-        side_configs = [
-            (
-                home_team,
-                fixture.get("home_xg", fixture.get("home_goals_value")),
-                fixture.get("home_cs", fixture.get("home_cs_value")),
-            ),
-            (
-                away_team,
-                fixture.get("away_xg", fixture.get("away_goals_value")),
-                fixture.get("away_cs", fixture.get("away_cs_value")),
-            ),
-        ]
-        for team, projected_goals, clean_sheet_pct in side_configs:
-            if not team:
-                continue
-            key = (timestamp_text, fixture_id, team)
-            if key in existing_keys:
-                continue
-            new_rows.append(
-                {
-                    "timestamp": timestamp_text,
-                    "fixture_id": fixture_id,
-                    "team": team,
-                    "projected_goals": optional_float(projected_goals),
-                    "clean_sheet_pct": optional_float(clean_sheet_pct),
-                    "round": round_name,
-                }
-            )
-
-    if not new_rows:
-        return
-
-    snapshots.extend(new_rows)
-    cutoff = datetime.now(timezone.utc) - timedelta(days=14)
-    snapshots = [
-        snapshot
-        for snapshot in snapshots
-        if (
-            parsed := parse_snapshot_timestamp(snapshot.get("timestamp"))
-        ) is not None
-        and parsed >= cutoff
-    ]
-    write_odds_snapshots(snapshots[-20000:])
-
-
-def get_delta_for_window(fixture_id, team, current_value, metric, hours):
-    current_number = optional_float(current_value)
-    if not fixture_id or not team or current_number is None:
-        return None
-
-    now = datetime.now(timezone.utc)
-    target_time = now - timedelta(hours=hours)
-    tolerance = timedelta(hours=max(6, hours * 0.25))
-    candidates = []
-    for snapshot in load_odds_snapshots():
-        if snapshot.get("fixture_id") != fixture_id or snapshot.get("team") != team:
-            continue
-        previous_value = optional_float(snapshot.get(metric))
-        snapshot_time = parse_snapshot_timestamp(snapshot.get("timestamp"))
-        if previous_value is None or snapshot_time is None:
-            continue
-        distance = abs(snapshot_time - target_time)
-        if distance <= tolerance:
-            candidates.append((distance, previous_value))
-
-    if not candidates:
-        return None
-
-    _distance, previous_value = min(candidates, key=lambda item: item[0])
-    return current_number - previous_value
-
-
-def get_delta_24h(fixture_id, team, current_value, metric):
-    return get_delta_for_window(fixture_id, team, current_value, metric, 24)
-
-
-def format_delta(delta, metric):
-    if delta is None:
-        return "-"
-    if metric == "clean_sheet_pct":
-        return f"{delta:+.1f}%"
-    return f"{delta:+.2f}"
-
-
-def delta_badge_class(delta):
-    if delta is None or abs(delta) < 0.005:
-        return "delta-neutral"
-    return "delta-up" if delta > 0 else "delta-down"
-
-
-def render_delta_badge(delta, metric):
-    return (
-        f'<span class="delta-badge {delta_badge_class(delta)}">'
-        f'{escape(format_delta(delta, metric))}'
-        "</span>"
-    )
 
 
 ROUND_TABLE_COLUMNS = ["Round of 32"]
@@ -3473,13 +3488,7 @@ def render_team_flag(team_name):
     )
 
 
-def render_metric_cell(value, metric, class_name, delta_window, fixture_id, team):
-    delta_html = ""
-    if delta_window != "Off":
-        hours = 48 if delta_window == "48h" else 24
-        delta = get_delta_for_window(fixture_id, team, value, metric, hours)
-        delta_html = render_delta_badge(delta, metric)
-
+def render_metric_cell(value, metric, class_name):
     value_text = (
         format_clean_sheet(value)
         if metric == "clean_sheet_pct"
@@ -3488,19 +3497,17 @@ def render_metric_cell(value, metric, class_name, delta_window, fixture_id, team
     return (
         f'<div class="metric-cell {class_name}">'
         f'<span class="metric-value">{escape(value_text)}</span>'
-        f"{delta_html}"
         "</div>"
     )
 
 
-def render_fixture_card(row, delta_window="Off"):
+def render_fixture_card(row):
     note = getattr(row, "odds_note", "") or ""
     note_html = (
         f'<div class="fixture-note">{escape(str(note))}</div>'
         if note
         else ""
     )
-    fixture_id = getattr(row, "fixture_id", "")
     return (
         '<div class="fixture-card-wrap">'
         '<article class="fixture-card">'
@@ -3518,13 +3525,13 @@ def render_fixture_card(row, delta_window="Off"):
         "</div></div>"
         '<div class="projection-col">'
         '<div class="metric-head">Proj goals</div>'
-        f'{render_metric_cell(row.home_xg, "projected_goals", goal_cell_class(row.home_xg), delta_window, fixture_id, row.home_team)}'
-        f'{render_metric_cell(row.away_xg, "projected_goals", goal_cell_class(row.away_xg), delta_window, fixture_id, row.away_team)}'
+        f'{render_metric_cell(row.home_xg, "projected_goals", goal_cell_class(row.home_xg))}'
+        f'{render_metric_cell(row.away_xg, "projected_goals", goal_cell_class(row.away_xg))}'
         "</div>"
         '<div class="clean-col">'
         '<div class="metric-head">Clean sheet</div>'
-        f'{render_metric_cell(row.home_cs, "clean_sheet_pct", cs_cell_class(row.home_cs), delta_window, fixture_id, row.home_team)}'
-        f'{render_metric_cell(row.away_cs, "clean_sheet_pct", cs_cell_class(row.away_cs), delta_window, fixture_id, row.away_team)}'
+        f'{render_metric_cell(row.home_cs, "clean_sheet_pct", cs_cell_class(row.home_cs))}'
+        f'{render_metric_cell(row.away_cs, "clean_sheet_pct", cs_cell_class(row.away_cs))}'
         "</div>"
         "</article>"
         f"{note_html}"
@@ -3532,12 +3539,11 @@ def render_fixture_card(row, delta_window="Off"):
     )
 
 
-def render_fixture_groups(fixtures, delta_window="Off"):
+def render_fixture_groups(fixtures):
     groups_html = []
     for date, date_fixtures in fixtures.groupby("date", sort=False):
         cards = "\n".join(
-            render_fixture_card(row, delta_window)
-            for row in date_fixtures.itertuples(index=False)
+            render_fixture_card(row) for row in date_fixtures.itertuples(index=False)
         )
         groups_html.append(
             '<section class="date-group">'
@@ -3676,10 +3682,10 @@ def render_top_teams_section(fixtures):
         )
 
 
-def render_export_area(fixtures, delta_window="Off"):
+def render_export_area(fixtures):
     return (
         '<section class="export-area">'
-        f"{render_fixture_groups(fixtures, delta_window)}"
+        f"{render_fixture_groups(fixtures)}"
         '<div class="export-footer">'
         "<div>Graphics by <strong>FPL Cartel</strong></div>"
         "<div>Source: Pinnacle odds via <strong>The Odds API</strong></div>"
@@ -3688,14 +3694,41 @@ def render_export_area(fixtures, delta_window="Off"):
     )
 
 
+def build_fixture_debug_table(fixtures):
+    rows = []
+    if fixtures is None or fixtures.empty:
+        return pd.DataFrame(rows)
+
+    for fixture in fixtures.to_dict("records"):
+        rows.append(
+            {
+                "Date": fixture.get("date", ""),
+                "Kickoff": fixture.get("kickoff", ""),
+                "Fixture": (
+                    f'{fixture.get("home_team", "")} vs '
+                    f'{fixture.get("away_team", "")}'
+                ),
+                "Round": fixture.get("round", ""),
+                "Bookmaker": fixture.get("bookmaker_used", "Sample"),
+                "Total line": format_price(fixture.get("total_line")),
+                "Spread line": format_price(fixture.get("home_spread")),
+                "H2H used": bool(fixture.get("h2h_used", False)),
+                "BTTS used": bool(fixture.get("btts_used", False)),
+                "Correct score used": bool(
+                    fixture.get("correct_score_used", False)
+                ),
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
 def render_desktop_dashboard():
     desktop_styles()
 
     raw_api_response, api_error, _api_status_code, last_updated = fetch_world_cup_odds()
     live_fixtures = parse_odds_response(raw_api_response)
     using_live_data = not live_fixtures.empty
-    if using_live_data:
-        save_odds_snapshots(live_fixtures, last_updated)
 
     status_text = "Live odds via The Odds API · Pinnacle only" if using_live_data else "Sample fallback data"
     display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
@@ -3716,7 +3749,7 @@ def render_desktop_dashboard():
         st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
 
     fixture_options = display_fixtures["fixture_set"].drop_duplicates().tolist()
-    control_cols = st.columns([1.05, 1.05, 0.95, 1.2])
+    control_cols = st.columns([1.2, 1.1, 1.2])
 
     with control_cols[0]:
         fixture_set = st.segmented_control(
@@ -3749,17 +3782,10 @@ def render_desktop_dashboard():
             index=default_round_index,
         )
 
-    with control_cols[2]:
-        delta_window = st.selectbox(
-            "Delta window",
-            ["Off", "24h", "48h"],
-            index=0,
-        )
-
     filtered = display_fixtures[display_fixtures["fixture_set"] == fixture_set]
     filtered = filtered[filtered["round"] == selected_round]
 
-    with control_cols[3]:
+    with control_cols[2]:
         export_page_size = 10
         total_export_pages = max(1, math.ceil(len(filtered) / export_page_size))
         export_page_options = [
@@ -3799,12 +3825,19 @@ def render_desktop_dashboard():
             unsafe_allow_html=True,
         )
     else:
-        st.markdown(render_export_area(filtered, delta_window), unsafe_allow_html=True)
+        st.markdown(render_export_area(filtered), unsafe_allow_html=True)
 
     top_team_fixtures = display_fixtures[
         display_fixtures["fixture_set"] == fixture_set
     ]
     render_top_teams_section(top_team_fixtures)
+
+    with st.expander("Fixture model debug", expanded=False):
+        st.dataframe(
+            build_fixture_debug_table(filtered),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     with st.expander("Debug API response", expanded=False):
         if api_error:
