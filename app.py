@@ -2400,19 +2400,16 @@ def render_delta_badge(delta, metric):
     )
 
 
-ROUND_TABLE_COLUMNS = ["Round 1", "Round 2", "Round 3"]
+ROUND_TABLE_COLUMNS = ["Round of 32"]
 ROUND_TO_MD = {
     "Round 1": "MD1",
     "Round 2": "MD2",
     "Round 3": "MD3",
+    "Round of 32": "Round of 32",
 }
 MD_TO_ROUND = {label: round_name for round_name, label in ROUND_TO_MD.items()}
 LEADERBOARD_RANGES = {
-    "MD1": ["Round 1"],
-    "MD2": ["Round 2"],
-    "MD3": ["Round 3"],
-    "MD1 + MD2": ["Round 1", "Round 2"],
-    "All group rounds": ROUND_TABLE_COLUMNS,
+    "Round of 32": ["Round of 32"],
 }
 
 
@@ -3625,7 +3622,7 @@ def render_top_teams_section(fixtures):
         <section class="top-teams-section">
           <div class="section-kicker">FPL Cartel model</div>
           <h2>Top Teams by Round</h2>
-          <p>Opponent and model-estimated value for each team's group-stage round.</p>
+          <p>Opponent and model-estimated value for each team's selected round.</p>
         </section>
         """,
         unsafe_allow_html=True,
