@@ -2,6 +2,7 @@ import os
 import math
 import base64
 import mimetypes
+import re
 from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
@@ -44,6 +45,8 @@ def get_odds_api_key():
 
 ODDS_API_KEY = get_odds_api_key()
 ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4/sports"
+FPL_FIXTURES_URL = "https://fantasy.premierleague.com/api/fixtures/"
+FPL_BOOTSTRAP_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
 MARKETS = "h2h,totals,spreads"
 COMPETITIONS = {
     "World Cup": {
@@ -1367,6 +1370,8 @@ def render_mobile_dashboard():
     if live_fixtures.empty:
         st.markdown(f'<div class="mobile-top-empty">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
         return
+    if selected_competition == "Premier League":
+        live_fixtures = add_premier_league_gameweeks(live_fixtures)
     fixtures = live_fixtures
 
     if selected_competition == "World Cup":
@@ -1377,8 +1382,14 @@ def render_mobile_dashboard():
         selected_round = st.selectbox("Round", round_options)
         fixtures_to_show = fixtures[fixtures["round"] == selected_round]
     else:
-        selected_window = st.selectbox("Fixtures", date_window_options())
-        fixtures_to_show = filter_by_date_window(fixtures, selected_window)
+        gw_options = gameweek_options()
+        default_gw = default_gameweek(fixtures)
+        selected_gameweek = st.selectbox(
+            "Gameweek",
+            gw_options,
+            index=gw_options.index(default_gw) if default_gw in gw_options else 0,
+        )
+        fixtures_to_show = filter_by_gameweek(fixtures, selected_gameweek)
     page_size = 8
     max_pages = max(1, math.ceil(len(fixtures_to_show) / page_size))
     page_options = [f"Page {page_number}" for page_number in range(1, max_pages + 1)]
@@ -1404,17 +1415,28 @@ def render_mobile_dashboard():
             key=f"{selected_competition}_mobile_leaderboard_range",
         )
         mobile_selected_rounds = LEADERBOARD_RANGES[mobile_leaderboard_range]
+        mobile_leaderboard_fixtures = fixtures
     else:
-        mobile_selected_rounds = ["Premier League"]
+        mobile_selected_rounds = [selected_gameweek]
+        mobile_leaderboard_fixtures = fixtures_to_show.copy()
+        mobile_leaderboard_fixtures["round"] = selected_gameweek
     mobile_goal_tab, mobile_cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
     with mobile_goal_tab:
         st.markdown(
-            render_mobile_top_teams(fixtures, "projected_goals", mobile_selected_rounds),
+            render_mobile_top_teams(
+                mobile_leaderboard_fixtures,
+                "projected_goals",
+                mobile_selected_rounds,
+            ),
             unsafe_allow_html=True,
         )
     with mobile_cs_tab:
         st.markdown(
-            render_mobile_top_teams(fixtures, "clean_sheet_pct", mobile_selected_rounds),
+            render_mobile_top_teams(
+                mobile_leaderboard_fixtures,
+                "clean_sheet_pct",
+                mobile_selected_rounds,
+            ),
             unsafe_allow_html=True,
         )
 
@@ -2178,21 +2200,126 @@ def get_current_round(fixtures):
     return rounds[-1] if rounds else "Round 1"
 
 
-def date_window_options():
-    return ["All upcoming", "Next 7 days", "Next 14 days"]
+PL_TEAM_ALIASES = {
+    "afc bournemouth": "bournemouth",
+    "bournemouth": "bournemouth",
+    "brighton": "brighton",
+    "brighton and hove albion": "brighton",
+    "brighton hove albion": "brighton",
+    "man city": "manchester city",
+    "manchester city": "manchester city",
+    "man utd": "manchester united",
+    "man united": "manchester united",
+    "manchester united": "manchester united",
+    "newcastle": "newcastle united",
+    "newcastle united": "newcastle united",
+    "nottingham forest": "nottingham forest",
+    "nottm forest": "nottingham forest",
+    "nott m forest": "nottingham forest",
+    "spurs": "tottenham hotspur",
+    "tottenham": "tottenham hotspur",
+    "tottenham hotspur": "tottenham hotspur",
+    "west ham": "west ham united",
+    "west ham united": "west ham united",
+    "wolves": "wolverhampton wanderers",
+    "wolverhampton": "wolverhampton wanderers",
+    "wolverhampton wanderers": "wolverhampton wanderers",
+}
 
 
-def filter_by_date_window(fixtures, selected_window):
-    if fixtures.empty or selected_window == "All upcoming":
+def normalize_pl_team_name(team_name):
+    clean = str(team_name or "").lower()
+    clean = clean.replace("&", " and ")
+    clean = re.sub(r"[^a-z0-9]+", " ", clean).strip()
+    clean = re.sub(r"\s+", " ", clean)
+    return PL_TEAM_ALIASES.get(clean, clean)
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_fpl_fixture_schedule():
+    try:
+        bootstrap = requests.get(FPL_BOOTSTRAP_URL, timeout=12)
+        bootstrap.raise_for_status()
+        fixtures_response = requests.get(FPL_FIXTURES_URL, timeout=12)
+        fixtures_response.raise_for_status()
+        teams = {
+            team["id"]: team["name"]
+            for team in bootstrap.json().get("teams", [])
+        }
+        rows = []
+        for fixture in fixtures_response.json():
+            kickoff = fixture.get("kickoff_time")
+            gameweek = fixture.get("event")
+            if not kickoff or not gameweek:
+                continue
+            kickoff_dt = parse_commence_datetime(kickoff)
+            home_team = teams.get(fixture.get("team_h"), "")
+            away_team = teams.get(fixture.get("team_a"), "")
+            rows.append(
+                {
+                    "gameweek": int(gameweek),
+                    "fixture_date": kickoff_dt.date().isoformat(),
+                    "home_norm": normalize_pl_team_name(home_team),
+                    "away_norm": normalize_pl_team_name(away_team),
+                }
+            )
+        return pd.DataFrame(rows)
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return pd.DataFrame(
+            columns=["gameweek", "fixture_date", "home_norm", "away_norm"]
+        )
+
+
+def add_premier_league_gameweeks(fixtures):
+    if fixtures.empty:
+        fixtures["gameweek"] = pd.Series(dtype="float")
         return fixtures
 
+    schedule = fetch_fpl_fixture_schedule()
+    fixtures = fixtures.copy()
+    fixtures["gameweek"] = None
+    if schedule.empty:
+        return fixtures
+
+    lookup = {
+        (row.home_norm, row.away_norm, row.fixture_date): row.gameweek
+        for row in schedule.itertuples(index=False)
+    }
+    gameweeks = []
+    for fixture in fixtures.to_dict("records"):
+        home_team = fixture.get("home_team") or fixture.get("Home")
+        away_team = fixture.get("away_team") or fixture.get("Away")
+        key = (
+            normalize_pl_team_name(home_team),
+            normalize_pl_team_name(away_team),
+            fixture["commence_time_dt"].date().isoformat(),
+        )
+        gameweeks.append(lookup.get(key))
+
+    fixtures["gameweek"] = gameweeks
+    return fixtures
+
+
+def gameweek_options():
+    return [f"GW{gameweek}" for gameweek in range(1, 39)]
+
+
+def default_gameweek(fixtures):
     now = datetime.now(timezone.utc)
-    days = 7 if selected_window == "Next 7 days" else 14
-    end = now + pd.Timedelta(days=days)
-    return fixtures[
-        (fixtures["commence_time_dt"] >= now)
-        & (fixtures["commence_time_dt"] <= end)
-    ]
+    for gameweek in range(1, 39):
+        gw_fixtures = fixtures[fixtures["gameweek"] == gameweek]
+        if not gw_fixtures.empty and any(gw_fixtures["commence_time_dt"] > now):
+            return f"GW{gameweek}"
+    available = fixtures["gameweek"].dropna().astype(int).sort_values().tolist()
+    return f"GW{available[0]}" if available else "GW1"
+
+
+def filter_by_gameweek(fixtures, selected_gameweek):
+    try:
+        gameweek = int(str(selected_gameweek).replace("GW", ""))
+    except ValueError:
+        return fixtures.iloc[0:0]
+    return fixtures[fixtures["gameweek"] == gameweek]
 
 
 SAMPLE_FIXTURES["round"] = SAMPLE_FIXTURES.apply(
@@ -3528,6 +3655,18 @@ def render_fixture_groups(fixtures):
     return "\n".join(groups_html)
 
 
+def render_fixture_group(fixtures, heading):
+    cards = "\n".join(
+        render_fixture_card(row) for row in fixtures.itertuples(index=False)
+    )
+    return (
+        '<section class="date-group">'
+        f'<h2 class="date-heading">{escape(str(heading))}</h2>'
+        f'<main class="fixture-grid">{cards}</main>'
+        "</section>"
+    )
+
+
 def render_top_team_value_cell(cell, metric_key):
     if not cell:
         return '<td class="top-round-cell top-round-empty">-</td>'
@@ -3596,13 +3735,18 @@ def render_leaderboard_table(fixtures, metric_key, selected_rounds):
     )
 
 
-def render_top_teams_section(fixtures, competition_name="World Cup"):
+def render_top_teams_section(fixtures, competition_name="World Cup", leaderboard_label=None):
+    section_title = (
+        "Top Teams by Round"
+        if competition_name == "World Cup"
+        else "Top Teams by Gameweek"
+    )
     st.markdown(
-        """
+        f"""
         <section class="top-teams-section">
           <div class="section-kicker">FPL Cartel model</div>
-          <h2>Top Teams by Round</h2>
-          <p>Opponent and model-estimated value for each team's selected round.</p>
+          <h2>{escape(section_title)}</h2>
+          <p>Opponent and model-estimated value for each team's selected round/gameweek.</p>
         </section>
         """,
         unsafe_allow_html=True,
@@ -3615,8 +3759,10 @@ def render_top_teams_section(fixtures, competition_name="World Cup"):
         )
         selected_rounds = LEADERBOARD_RANGES[leaderboard_range]
     else:
-        leaderboard_range = "Premier League"
-        selected_rounds = ["Premier League"]
+        leaderboard_range = leaderboard_label or "Premier League"
+        selected_rounds = [leaderboard_range]
+        fixtures = fixtures.copy()
+        fixtures["round"] = leaderboard_range
     goals_tab, cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
     with goals_tab:
         st.markdown(
@@ -3662,10 +3808,15 @@ def render_top_teams_section(fixtures, competition_name="World Cup"):
         )
 
 
-def render_export_area(fixtures):
+def render_export_area(fixtures, group_heading=None):
+    fixture_html = (
+        render_fixture_group(fixtures, group_heading)
+        if group_heading
+        else render_fixture_groups(fixtures)
+    )
     return (
         '<section class="export-area">'
-        f"{render_fixture_groups(fixtures)}"
+        f"{fixture_html}"
         '<div class="export-footer">'
         "<div>Graphics by <strong>FPL Cartel</strong></div>"
         "<div>Source: Pinnacle odds via <strong>The Odds API</strong></div>"
@@ -3689,6 +3840,11 @@ def build_fixture_debug_table(fixtures):
                     f'{fixture.get("away_team", "")}'
                 ),
                 "Round": fixture.get("round", ""),
+                "Gameweek": (
+                    f"GW{int(fixture['gameweek'])}"
+                    if pd.notna(fixture.get("gameweek"))
+                    else ""
+                ),
                 "Bookmaker": fixture.get("bookmaker_used", "Sample"),
                 "Total line": format_price(fixture.get("total_line")),
                 "Spread line": format_price(fixture.get("home_spread")),
@@ -3711,6 +3867,8 @@ def render_competition_dashboard(selected_competition):
         competition_config["sport_key"]
     )
     live_fixtures = parse_odds_response(raw_api_response, selected_competition)
+    if selected_competition == "Premier League":
+        live_fixtures = add_premier_league_gameweeks(live_fixtures)
     using_live_data = not live_fixtures.empty
 
     status_text = "Live odds via The Odds API &middot; Pinnacle only"
@@ -3767,12 +3925,15 @@ def render_competition_dashboard(selected_competition):
         filtered = filtered[filtered["round"] == selected_filter]
     else:
         with control_cols[1]:
+            gw_options = gameweek_options()
+            default_gw = default_gameweek(filtered)
             selected_filter = st.selectbox(
-                "Fixtures",
-                date_window_options(),
-                key=f"{selected_competition}_fixtures",
+                "Gameweek",
+                gw_options,
+                index=gw_options.index(default_gw) if default_gw in gw_options else 0,
+                key=f"{selected_competition}_gameweek",
             )
-        filtered = filter_by_date_window(filtered, selected_filter)
+        filtered = filter_by_gameweek(filtered, selected_filter)
 
     with control_cols[2]:
         neutral_label = "On" if competition_config["neutral"] else "Off"
@@ -3825,12 +3986,19 @@ def render_competition_dashboard(selected_competition):
             unsafe_allow_html=True,
         )
     else:
-        st.markdown(render_export_area(filtered), unsafe_allow_html=True)
+        group_heading = selected_filter if selected_competition == "Premier League" else None
+        st.markdown(render_export_area(filtered, group_heading), unsafe_allow_html=True)
 
-    top_team_fixtures = display_fixtures[
-        display_fixtures["fixture_set"] == fixture_set
-    ]
-    render_top_teams_section(top_team_fixtures, selected_competition)
+    top_team_fixtures = (
+        filtered
+        if selected_competition == "Premier League"
+        else display_fixtures[display_fixtures["fixture_set"] == fixture_set]
+    )
+    render_top_teams_section(
+        top_team_fixtures,
+        selected_competition,
+        selected_filter if selected_competition == "Premier League" else None,
+    )
 
     with st.expander("Fixture model debug", expanded=False):
         st.dataframe(
