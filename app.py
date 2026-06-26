@@ -2,7 +2,6 @@ import os
 import math
 import base64
 import mimetypes
-import re
 from datetime import datetime, timezone
 from html import escape
 from io import BytesIO
@@ -45,6 +44,7 @@ def get_odds_api_key():
 
 ODDS_API_KEY = get_odds_api_key()
 ODDS_API_URL = "https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds"
+MARKETS = "h2h,totals,spreads"
 NO_LIVE_ODDS_MESSAGE = (
     "No World Cup betting odds available yet. This usually happens when fixtures "
     "are too far away or markets are not open."
@@ -539,75 +539,6 @@ def extract_h2h_probabilities(bookmaker, home_team, away_team):
     }
 
 
-def extract_btts_probability(bookmaker):
-    market = extract_market(bookmaker, "btts")
-    yes_prob = None
-    no_prob = None
-    for outcome in market.get("outcomes", []):
-        name = str(outcome.get("name", "")).lower()
-        prob = implied_prob(outcome.get("price"))
-        if prob is None:
-            continue
-        if name in {"yes", "both teams to score - yes", "btts yes"}:
-            yes_prob = prob
-        elif name in {"no", "both teams to score - no", "btts no"}:
-            no_prob = prob
-
-    fair_probs = normalize_probs([yes_prob, no_prob])
-    if len(fair_probs) != 2:
-        return None
-    return fair_probs[0]
-
-
-def parse_scoreline(outcome):
-    parts = [
-        str(outcome.get(key, ""))
-        for key in ("name", "description")
-        if outcome.get(key)
-    ]
-    text = " ".join(parts)
-    match = re.search(r"(\d+)\s*[-:]\s*(\d+)", text)
-    if not match:
-        return None
-    return int(match.group(1)), int(match.group(2))
-
-
-def extract_correct_score_projection(bookmaker):
-    market = extract_market(bookmaker, "correct_score")
-    score_probs = []
-    for outcome in market.get("outcomes", []):
-        scoreline = parse_scoreline(outcome)
-        prob = implied_prob(outcome.get("price"))
-        if scoreline is None or prob is None:
-            continue
-        score_probs.append((scoreline[0], scoreline[1], prob))
-
-    fair_probs = normalize_probs([prob for _home, _away, prob in score_probs])
-    if not fair_probs:
-        return None, None
-
-    home_score_xg = sum(
-        score_probs[index][0] * fair_probs[index]
-        for index in range(len(fair_probs))
-    )
-    away_score_xg = sum(
-        score_probs[index][1] * fair_probs[index]
-        for index in range(len(fair_probs))
-    )
-    return home_score_xg, away_score_xg
-
-
-def apply_correct_score_blend(home_goals, away_goals, bookmaker):
-    score_home, score_away = extract_correct_score_projection(bookmaker)
-    if score_home is None or score_away is None:
-        return home_goals, away_goals, False
-    return (
-        (home_goals * 0.75) + (score_home * 0.25),
-        (away_goals * 0.75) + (score_away * 0.25),
-        True,
-    )
-
-
 def apply_h2h_calibration(home_goals, away_goals, bookmaker, home_team, away_team):
     h2h_probs = extract_h2h_probabilities(bookmaker, home_team, away_team)
     if not h2h_probs:
@@ -624,20 +555,6 @@ def apply_h2h_calibration(home_goals, away_goals, bookmaker, home_team, away_tea
     return (
         max(0.05, home_goals + adjustment),
         max(0.05, away_goals - adjustment),
-        True,
-    )
-
-
-def apply_btts_calibration(home_goals, away_goals, bookmaker):
-    btts_prob = extract_btts_probability(bookmaker)
-    if btts_prob is None:
-        return home_goals, away_goals, False
-
-    poisson_btts = (1 - math.exp(-home_goals)) * (1 - math.exp(-away_goals))
-    adjustment = max(-0.10, min(0.10, (btts_prob - poisson_btts) * 0.25))
-    return (
-        max(0.05, home_goals + adjustment),
-        max(0.05, away_goals + adjustment),
         True,
     )
 
@@ -678,19 +595,7 @@ def project_goals_from_event(event):
         home_team,
         away_team,
     )
-    home_goals, away_goals, correct_score_used = apply_correct_score_blend(
-        home_goals,
-        away_goals,
-        bookmaker,
-    )
-    home_goals, away_goals, btts_used = apply_btts_calibration(
-        home_goals,
-        away_goals,
-        bookmaker,
-    )
     debug["h2h_used"] = h2h_used
-    debug["correct_score_used"] = correct_score_used
-    debug["btts_used"] = btts_used
     return home_goals, away_goals, debug
 
 
@@ -818,12 +723,12 @@ def mobile_cs_cell_class(value):
 def fetch_world_cup_odds_mobile():
     api_key = ODDS_API_KEY
     if not api_key or api_key == "your_api_key_here":
-        return [], None
+        return [], None, "Missing Odds API key."
 
     params = {
         "apiKey": api_key,
         "regions": "uk,eu",
-        "markets": "h2h,totals,spreads,btts,correct_score",
+        "markets": MARKETS,
         "oddsFormat": "decimal",
         "dateFormat": "iso",
     }
@@ -831,10 +736,12 @@ def fetch_world_cup_odds_mobile():
     try:
         response = requests.get(ODDS_API_URL, params=params, timeout=12)
         if response.status_code != 200:
-            return [], None
-        return response.json(), datetime.now(timezone.utc)
-    except (requests.RequestException, ValueError):
-        return [], None
+            return [], None, f"The Odds API returned status code {response.status_code}."
+        return response.json(), datetime.now(timezone.utc), None
+    except requests.RequestException as exc:
+        return [], None, str(exc)
+    except ValueError:
+        return [], None, "The Odds API returned a response that was not valid JSON."
 
 
 def mobile_parse_odds_response(payload):
@@ -1396,7 +1303,7 @@ def render_mobile_dashboard():
         render_brand_header(),
         unsafe_allow_html=True,
     )
-    mobile_api_response, mobile_last_updated = fetch_world_cup_odds_mobile()
+    mobile_api_response, mobile_last_updated, mobile_api_error = fetch_world_cup_odds_mobile()
     mobile_updated_text = format_last_updated(mobile_last_updated)
     mobile_source_note = (
         "Live odds via The Odds API &middot; Pinnacle only"
@@ -1408,7 +1315,14 @@ def render_mobile_dashboard():
     )
 
     live_fixtures = mobile_parse_odds_response(mobile_api_response)
-    fixtures = live_fixtures if not live_fixtures.empty else mobile_sample_fixtures()
+    if mobile_api_error:
+        st.error("Live odds unavailable: API request failed. Check markets/API plan.")
+        st.caption(f"Details: {mobile_api_error}")
+        return
+    if live_fixtures.empty:
+        st.markdown(f'<div class="mobile-top-empty">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
+        return
+    fixtures = live_fixtures
 
     round_options = sorted(
         fixtures["round"].drop_duplicates().tolist(),
@@ -2090,7 +2004,7 @@ def fetch_world_cup_odds():
     params = {
         "apiKey": api_key,
         "regions": "uk,eu",
-        "markets": "h2h,totals,spreads,btts,correct_score",
+        "markets": MARKETS,
         "oddsFormat": "decimal",
         "dateFormat": "iso",
     }
@@ -3730,8 +3644,8 @@ def render_desktop_dashboard():
     live_fixtures = parse_odds_response(raw_api_response)
     using_live_data = not live_fixtures.empty
 
-    status_text = "Live odds via The Odds API · Pinnacle only" if using_live_data else "Sample fallback data"
-    display_fixtures = live_fixtures if using_live_data else SAMPLE_FIXTURES
+    status_text = "Live odds via The Odds API &middot; Pinnacle only"
+    display_fixtures = live_fixtures
     last_updated_text = format_last_updated(last_updated)
     source_note = status_text + (
         f"<br>{escape(last_updated_text)}" if last_updated_text else ""
@@ -3743,10 +3657,13 @@ def render_desktop_dashboard():
     )
 
     if api_error:
-        st.warning(f"Could not fetch live odds from The Odds API: {api_error}")
+        st.error("Live odds unavailable: API request failed. Check markets/API plan.")
+        st.caption(f"Details: {api_error}")
+        return
 
     if not using_live_data:
         st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
+        return
 
     fixture_options = display_fixtures["fixture_set"].drop_duplicates().tolist()
     control_cols = st.columns([1.2, 1.1, 1.2])
