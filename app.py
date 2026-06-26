@@ -450,6 +450,16 @@ def mobile_round_for_fixture(home_team, away_team, dt):
         ("Qatar", "Canada"): "Round 2",
         ("Colombia", "DR Congo"): "Round 2",
         ("DR Congo", "Colombia"): "Round 2",
+        ("Algeria", "Austria"): "Round 3",
+        ("Austria", "Algeria"): "Round 3",
+        ("Jordan", "Argentina"): "Round 3",
+        ("Argentina", "Jordan"): "Round 3",
+        ("South Africa", "Canada"): "Round of 32",
+        ("Canada", "South Africa"): "Round of 32",
+        ("Brazil", "Japan"): "Round of 32",
+        ("Japan", "Brazil"): "Round of 32",
+        ("Netherlands", "Morocco"): "Round of 32",
+        ("Morocco", "Netherlands"): "Round of 32",
     }
     override = overrides.get((home_team, away_team))
     if override:
@@ -2023,6 +2033,16 @@ ROUND_OVERRIDES = {
     ("Qatar", "Canada"): "Round 2",
     ("Colombia", "DR Congo"): "Round 2",
     ("DR Congo", "Colombia"): "Round 2",
+    ("Algeria", "Austria"): "Round 3",
+    ("Austria", "Algeria"): "Round 3",
+    ("Jordan", "Argentina"): "Round 3",
+    ("Argentina", "Jordan"): "Round 3",
+    ("South Africa", "Canada"): "Round of 32",
+    ("Canada", "South Africa"): "Round of 32",
+    ("Brazil", "Japan"): "Round of 32",
+    ("Japan", "Brazil"): "Round of 32",
+    ("Netherlands", "Morocco"): "Round of 32",
+    ("Morocco", "Netherlands"): "Round of 32",
 }
 
 
