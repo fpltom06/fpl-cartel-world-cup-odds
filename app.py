@@ -43,10 +43,20 @@ def get_odds_api_key():
 
 
 ODDS_API_KEY = get_odds_api_key()
-ODDS_API_URL = "https://api.the-odds-api.com/v4/sports/soccer_fifa_world_cup/odds"
+ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4/sports"
 MARKETS = "h2h,totals,spreads"
+COMPETITIONS = {
+    "World Cup": {
+        "sport_key": "soccer_fifa_world_cup",
+        "neutral": True,
+    },
+    "Premier League": {
+        "sport_key": "soccer_epl",
+        "neutral": False,
+    },
+}
 NO_LIVE_ODDS_MESSAGE = (
-    "No World Cup betting odds available yet. This usually happens when fixtures "
+    "No live betting odds available yet. This usually happens when fixtures "
     "are too far away or markets are not open."
 )
 PINNACLE_UNAVAILABLE_MESSAGE = "Pinnacle odds unavailable"
@@ -69,7 +79,7 @@ def make_fixture_id(commence_time, home_team, away_team):
     return f"{commence_time or 'tbd'}::{home_team}::{away_team}"
 
 st.set_page_config(
-    page_title="FPL Cartel World Cup Odds Dashboard",
+    page_title="FPL Cartel Odds Dashboard",
     page_icon="WC",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -195,13 +205,17 @@ def format_last_updated(timestamp):
     return f"Last updated: {timestamp.strftime('%d %b %Y %H:%M UTC')}"
 
 
-def render_brand_header():
+def competition_title(competition_name):
+    return f"FPL Cartel {competition_name} Odds Dashboard"
+
+
+def render_brand_header(competition_name="World Cup"):
     logo_src = get_logo_src()
     return f"""
     <div class="brand-header">
       <img src="{logo_src}" class="brand-logo" alt="FPL Cartel logo">
       <div>
-        <h1>FPL Cartel World Cup Odds Dashboard</h1>
+        <h1>{escape(competition_title(competition_name))}</h1>
         <a href="{SUBLAUNCH_URL}" target="_blank" rel="noopener noreferrer">
           Join FPL Cartel on Sublaunch
         </a>
@@ -719,11 +733,11 @@ def mobile_cs_cell_class(value):
     return "dark-red"
 
 
-@st.cache_data(ttl=600, show_spinner=False)
-def fetch_world_cup_odds_mobile():
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_odds(sport_key):
     api_key = ODDS_API_KEY
     if not api_key or api_key == "your_api_key_here":
-        return [], None, "Missing Odds API key."
+        return [], "Missing Odds API key.", None, None
 
     params = {
         "apiKey": api_key,
@@ -734,17 +748,28 @@ def fetch_world_cup_odds_mobile():
     }
 
     try:
-        response = requests.get(ODDS_API_URL, params=params, timeout=12)
-        if response.status_code != 200:
-            return [], None, f"The Odds API returned status code {response.status_code}."
-        return response.json(), datetime.now(timezone.utc), None
+        response = requests.get(
+            f"{ODDS_API_BASE_URL}/{sport_key}/odds",
+            params=params,
+            timeout=12,
+        )
+        status_code = response.status_code
+        if status_code != 200:
+            return [], f"The Odds API returned status code {status_code}.", status_code, None
+        return response.json(), None, status_code, datetime.now(timezone.utc)
     except requests.RequestException as exc:
-        return [], None, str(exc)
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        return [], str(exc), status_code, None
     except ValueError:
-        return [], None, "The Odds API returned a response that was not valid JSON."
+        return [], "The Odds API returned a response that was not valid JSON.", None, None
 
 
-def mobile_parse_odds_response(payload):
+def fetch_world_cup_odds_mobile():
+    payload, error, _status, updated = fetch_odds(COMPETITIONS["World Cup"]["sport_key"])
+    return payload, updated, error
+
+
+def mobile_parse_odds_response(payload, competition_name="World Cup"):
     rows = []
     for event in payload or []:
         commence_time = event.get("commence_time")
@@ -780,7 +805,12 @@ def mobile_parse_odds_response(payload):
                 "away_goals_value": away_goals,
                 "away_cs_value": away_cs,
                 "odds_note": odds_note,
-                "round": mobile_round_for_fixture(home_team, away_team, dt),
+                "round": (
+                    mobile_round_for_fixture(home_team, away_team, dt)
+                    if competition_name == "World Cup"
+                    else "Premier League"
+                ),
+                "fixture_set": competition_name,
                 "commence_time_dt": dt,
             }
         )
@@ -1299,11 +1329,26 @@ def mobile_styles():
 
 def render_mobile_dashboard():
     mobile_styles()
+    selected_competition = st.selectbox(
+        "Competition",
+        list(COMPETITIONS.keys()),
+        key="mobile_competition",
+    )
+    competition_config = COMPETITIONS[selected_competition]
+    mobile_neutral_label = "On" if competition_config["neutral"] else "Off"
+    st.segmented_control(
+        "Neutral venue",
+        [mobile_neutral_label],
+        default=mobile_neutral_label,
+        key=f"{selected_competition}_mobile_neutral_venue",
+    )
     st.markdown(
-        render_brand_header(),
+        render_brand_header(selected_competition),
         unsafe_allow_html=True,
     )
-    mobile_api_response, mobile_last_updated, mobile_api_error = fetch_world_cup_odds_mobile()
+    mobile_api_response, mobile_api_error, _mobile_status, mobile_last_updated = fetch_odds(
+        competition_config["sport_key"]
+    )
     mobile_updated_text = format_last_updated(mobile_last_updated)
     mobile_source_note = (
         "Live odds via The Odds API &middot; Pinnacle only"
@@ -1314,7 +1359,7 @@ def render_mobile_dashboard():
         unsafe_allow_html=True,
     )
 
-    live_fixtures = mobile_parse_odds_response(mobile_api_response)
+    live_fixtures = mobile_parse_odds_response(mobile_api_response, selected_competition)
     if mobile_api_error:
         st.error("Live odds unavailable: API request failed. Check markets/API plan.")
         st.caption(f"Details: {mobile_api_error}")
@@ -1324,13 +1369,16 @@ def render_mobile_dashboard():
         return
     fixtures = live_fixtures
 
-    round_options = sorted(
-        fixtures["round"].drop_duplicates().tolist(),
-        key=mobile_round_sort_key,
-    )
-    selected_round = st.selectbox("Round", round_options)
-
-    fixtures_to_show = fixtures[fixtures["round"] == selected_round]
+    if selected_competition == "World Cup":
+        round_options = sorted(
+            fixtures["round"].drop_duplicates().tolist(),
+            key=mobile_round_sort_key,
+        )
+        selected_round = st.selectbox("Round", round_options)
+        fixtures_to_show = fixtures[fixtures["round"] == selected_round]
+    else:
+        selected_window = st.selectbox("Fixtures", date_window_options())
+        fixtures_to_show = filter_by_date_window(fixtures, selected_window)
     page_size = 8
     max_pages = max(1, math.ceil(len(fixtures_to_show) / page_size))
     page_options = [f"Page {page_number}" for page_number in range(1, max_pages + 1)]
@@ -1349,12 +1397,15 @@ def render_mobile_dashboard():
         """,
         unsafe_allow_html=True,
     )
-    mobile_leaderboard_range = st.selectbox(
-        "Leaderboard range",
-        list(LEADERBOARD_RANGES.keys()),
-        key="mobile_leaderboard_range",
-    )
-    mobile_selected_rounds = LEADERBOARD_RANGES[mobile_leaderboard_range]
+    if selected_competition == "World Cup":
+        mobile_leaderboard_range = st.selectbox(
+            "Leaderboard range",
+            list(LEADERBOARD_RANGES.keys()),
+            key=f"{selected_competition}_mobile_leaderboard_range",
+        )
+        mobile_selected_rounds = LEADERBOARD_RANGES[mobile_leaderboard_range]
+    else:
+        mobile_selected_rounds = ["Premier League"]
     mobile_goal_tab, mobile_cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
     with mobile_goal_tab:
         st.markdown(
@@ -1995,31 +2046,8 @@ def desktop_styles():
     st.markdown(DESKTOP_STYLE, unsafe_allow_html=True)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
 def fetch_world_cup_odds():
-    api_key = ODDS_API_KEY
-    if not api_key or api_key == "your_api_key_here":
-        return [], None, None, None
-
-    params = {
-        "apiKey": api_key,
-        "regions": "uk,eu",
-        "markets": MARKETS,
-        "oddsFormat": "decimal",
-        "dateFormat": "iso",
-    }
-
-    try:
-        response = requests.get(ODDS_API_URL, params=params, timeout=12)
-        status_code = response.status_code
-        if status_code != 200:
-            return [], f"The Odds API returned status code {status_code}.", status_code, None
-        return response.json(), None, status_code, datetime.now(timezone.utc)
-    except requests.RequestException as exc:
-        status_code = getattr(getattr(exc, "response", None), "status_code", None)
-        return [], str(exc), status_code, None
-    except ValueError:
-        return [], "The Odds API returned a response that was not valid JSON.", None, None
+    return fetch_odds(COMPETITIONS["World Cup"]["sport_key"])
 
 
 def team_badge(team_name):
@@ -2150,6 +2178,23 @@ def get_current_round(fixtures):
     return rounds[-1] if rounds else "Round 1"
 
 
+def date_window_options():
+    return ["All upcoming", "Next 7 days", "Next 14 days"]
+
+
+def filter_by_date_window(fixtures, selected_window):
+    if fixtures.empty or selected_window == "All upcoming":
+        return fixtures
+
+    now = datetime.now(timezone.utc)
+    days = 7 if selected_window == "Next 7 days" else 14
+    end = now + pd.Timedelta(days=days)
+    return fixtures[
+        (fixtures["commence_time_dt"] >= now)
+        & (fixtures["commence_time_dt"] <= end)
+    ]
+
+
 SAMPLE_FIXTURES["round"] = SAMPLE_FIXTURES.apply(
     lambda row: get_round_for_fixture(
         row["home_team"],
@@ -2260,7 +2305,7 @@ def calculate_clean_sheet_percent(opponent_projected_goals):
     return round(math.exp(-opponent_projected_goals) * 100)
 
 
-def parse_odds_response(payload):
+def parse_odds_response(payload, competition_name="World Cup"):
     rows = []
     for event in payload or []:
         commence_time = event.get("commence_time")
@@ -2283,14 +2328,14 @@ def parse_odds_response(payload):
                 or make_fixture_id(commence_time, home_team, away_team),
                 "date": date_label,
                 "kickoff": kickoff,
-                "round": get_round_for_fixture(
-                    home_team,
-                    away_team,
-                    commence_time_dt,
+                "round": (
+                    get_round_for_fixture(home_team, away_team, commence_time_dt)
+                    if competition_name == "World Cup"
+                    else "Premier League"
                 ),
                 "commence_time": commence_time,
                 "commence_time_dt": commence_time_dt,
-                "fixture_set": "World Cup",
+                "fixture_set": competition_name,
                 "home_team": home_team,
                 "away_team": away_team,
                 "home_badge": team_badge(home_team),
@@ -2335,6 +2380,7 @@ ROUND_TO_MD = {
     "Round 2": "MD2",
     "Round 3": "MD3",
     "Round of 32": "Round of 32",
+    "Premier League": "Fixture",
 }
 MD_TO_ROUND = {label: round_name for round_name, label in ROUND_TO_MD.items()}
 LEADERBOARD_RANGES = {
@@ -2696,7 +2742,13 @@ def draw_wrapped_text_center(draw, box, text, font, fill, max_lines=2, line_heig
         y += line_px
 
 
-def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_rounds):
+def build_leaderboard_image(
+    fixtures,
+    metric_key,
+    leaderboard_range,
+    selected_rounds,
+    competition_name="World Cup",
+):
     EXPORT_W = 1080
     EXPORT_H = 1350
     BG = "#f3f6f9"
@@ -2722,7 +2774,7 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
     logo = load_export_logo(66)
     img.paste(logo, (MARGIN_X, 30), logo)
     draw.text((MARGIN_X + 84, 29), metric_title(metric_key), font=title_font, fill=hex_to_rgb("#111827"))
-    draw.text((MARGIN_X + 86, 77), "FPL Cartel World Cup Odds Dashboard", font=link_font, fill=hex_to_rgb("#64748b"))
+    draw.text((MARGIN_X + 86, 77), competition_title(competition_name), font=link_font, fill=hex_to_rgb("#64748b"))
     draw.text((MARGIN_X, 120), leaderboard_range, font=subtitle_font, fill=hex_to_rgb("#4b5563"))
 
     rows = build_leaderboard_rows(fixtures, metric_key, selected_rounds)
@@ -2865,7 +2917,7 @@ def build_leaderboard_image(fixtures, metric_key, leaderboard_range, selected_ro
     return output
 
 
-def build_export_image(fixtures_to_show, selected_round):
+def build_export_image(fixtures_to_show, selected_round, competition_name="World Cup"):
     EXPORT_W = 1920
     EXPORT_H = 1080
     BG = "#f3f6f9"
@@ -2911,7 +2963,7 @@ def build_export_image(fixtures_to_show, selected_round):
     header_text_x = LEFT_X + 112
     draw.text(
         (header_text_x, 38),
-        "FPL Cartel World Cup Odds Dashboard",
+        competition_title(competition_name),
         font=title_font,
         fill=hex_to_rgb("#111827"),
     )
@@ -3049,13 +3101,20 @@ def build_export_image(fixtures_to_show, selected_round):
     return output
 
 
-def build_export_image_bytes(fixtures_to_show, selected_round, export_page, total_export_pages):
+def build_export_image_bytes(
+    fixtures_to_show,
+    selected_round,
+    export_page,
+    total_export_pages,
+    competition_name="World Cup",
+):
     if USE_BROWSER_EXPORT:
         return build_export_with_playwright(
             fixtures_to_show,
             selected_round,
             export_page,
             total_export_pages,
+            competition_name,
         ).getvalue()
 
     return build_export_with_pil(
@@ -3063,13 +3122,14 @@ def build_export_image_bytes(fixtures_to_show, selected_round, export_page, tota
         selected_round,
         export_page,
         total_export_pages,
+        competition_name,
     ).getvalue()
 
 
-def build_export_with_playwright(fixtures_to_show, selected_round, export_page, total_export_pages):
+def build_export_with_playwright(fixtures_to_show, selected_round, export_page, total_export_pages, competition_name="World Cup"):
     from playwright.sync_api import sync_playwright
 
-    html = build_export_html(fixtures_to_show, selected_round, export_page, total_export_pages)
+    html = build_export_html(fixtures_to_show, selected_round, export_page, total_export_pages, competition_name)
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
@@ -3085,11 +3145,11 @@ def build_export_with_playwright(fixtures_to_show, selected_round, export_page, 
             browser.close()
 
 
-def build_export_with_pil(fixtures_to_show, selected_round, export_page, total_export_pages):
+def build_export_with_pil(fixtures_to_show, selected_round, export_page, total_export_pages, competition_name="World Cup"):
     export_title = selected_round
     if total_export_pages > 1:
         export_title = f"{selected_round} - Page {export_page} of {total_export_pages}"
-    return build_export_image(fixtures_to_show, export_title)
+    return build_export_image(fixtures_to_show, export_title, competition_name)
 
 
 def render_export_team_flag(team_name):
@@ -3133,7 +3193,7 @@ def render_export_fixture_card(row):
     )
 
 
-def build_export_html(fixtures_to_show, selected_round, export_page, total_export_pages):
+def build_export_html(fixtures_to_show, selected_round, export_page, total_export_pages, competition_name="World Cup"):
     cards = "\n".join(
         render_export_fixture_card(row)
         for row in fixtures_to_show.head(10).itertuples(index=False)
@@ -3373,7 +3433,7 @@ def build_export_html(fixtures_to_show, selected_round, export_page, total_expor
 </head>
 <body>
   <section class="export-canvas">
-    <h1 class="export-title">FPL Cartel World Cup Odds Dashboard</h1>
+    <h1 class="export-title">{escape(competition_title(competition_name))}</h1>
     <p class="export-subtitle">{escape(subtitle)}</p>
     <main class="export-grid">
       {cards}
@@ -3536,7 +3596,7 @@ def render_leaderboard_table(fixtures, metric_key, selected_rounds):
     )
 
 
-def render_top_teams_section(fixtures):
+def render_top_teams_section(fixtures, competition_name="World Cup"):
     st.markdown(
         """
         <section class="top-teams-section">
@@ -3547,12 +3607,16 @@ def render_top_teams_section(fixtures):
         """,
         unsafe_allow_html=True,
     )
-    leaderboard_range = st.selectbox(
-        "Leaderboard range",
-        list(LEADERBOARD_RANGES.keys()),
-        key="desktop_leaderboard_range",
-    )
-    selected_rounds = LEADERBOARD_RANGES[leaderboard_range]
+    if competition_name == "World Cup":
+        leaderboard_range = st.selectbox(
+            "Leaderboard range",
+            list(LEADERBOARD_RANGES.keys()),
+            key=f"{competition_name}_leaderboard_range",
+        )
+        selected_rounds = LEADERBOARD_RANGES[leaderboard_range]
+    else:
+        leaderboard_range = "Premier League"
+        selected_rounds = ["Premier League"]
     goals_tab, cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
     with goals_tab:
         st.markdown(
@@ -3566,13 +3630,14 @@ def render_top_teams_section(fixtures):
                 "projected_goals",
                 leaderboard_range,
                 selected_rounds,
+                competition_name,
             ),
             file_name=(
                 "fpl-cartel-leaderboard-projected-goals-"
                 f"{leaderboard_range.lower().replace(' ', '-').replace('+', 'plus')}.png"
             ),
             mime="image/png",
-            key="download_projected_goals_leaderboard",
+            key=f"{competition_name}_download_projected_goals_leaderboard",
         )
     with cs_tab:
         st.markdown(
@@ -3586,13 +3651,14 @@ def render_top_teams_section(fixtures):
                 "clean_sheet_pct",
                 leaderboard_range,
                 selected_rounds,
+                competition_name,
             ),
             file_name=(
                 "fpl-cartel-leaderboard-clean-sheets-"
                 f"{leaderboard_range.lower().replace(' ', '-').replace('+', 'plus')}.png"
             ),
             mime="image/png",
-            key="download_clean_sheet_leaderboard",
+            key=f"{competition_name}_download_clean_sheet_leaderboard",
         )
 
 
@@ -3637,11 +3703,14 @@ def build_fixture_debug_table(fixtures):
     return pd.DataFrame(rows)
 
 
-def render_desktop_dashboard():
+def render_competition_dashboard(selected_competition):
     desktop_styles()
+    competition_config = COMPETITIONS[selected_competition]
 
-    raw_api_response, api_error, _api_status_code, last_updated = fetch_world_cup_odds()
-    live_fixtures = parse_odds_response(raw_api_response)
+    raw_api_response, api_error, _api_status_code, last_updated = fetch_odds(
+        competition_config["sport_key"]
+    )
+    live_fixtures = parse_odds_response(raw_api_response, selected_competition)
     using_live_data = not live_fixtures.empty
 
     status_text = "Live odds via The Odds API &middot; Pinnacle only"
@@ -3650,7 +3719,7 @@ def render_desktop_dashboard():
     source_note = status_text + (
         f"<br>{escape(last_updated_text)}" if last_updated_text else ""
     )
-    st.markdown(render_brand_header(), unsafe_allow_html=True)
+    st.markdown(render_brand_header(selected_competition), unsafe_allow_html=True)
     st.markdown(
         f'<div class="source-note">{source_note}</div>',
         unsafe_allow_html=True,
@@ -3666,43 +3735,55 @@ def render_desktop_dashboard():
         return
 
     fixture_options = display_fixtures["fixture_set"].drop_duplicates().tolist()
-    control_cols = st.columns([1.2, 1.1, 1.2])
+    control_cols = st.columns([1.1, 1.05, 0.9, 1.2])
 
     with control_cols[0]:
         fixture_set = st.segmented_control(
             "Fixture set",
             fixture_options,
             default=fixture_options[0],
-        )
-
-    available_rounds = (
-        display_fixtures.loc[display_fixtures["fixture_set"] == fixture_set, "round"]
-        .drop_duplicates()
-        .tolist()
-    )
-    round_options = sorted(available_rounds, key=round_sort_key)
-    fixture_records = (
-        display_fixtures.loc[display_fixtures["fixture_set"] == fixture_set]
-        .to_dict("records")
-    )
-    default_round = get_current_round(fixture_records)
-    default_round_index = (
-        round_options.index(default_round)
-        if default_round in round_options
-        else 0
-    )
-
-    with control_cols[1]:
-        selected_round = st.selectbox(
-            "Round",
-            round_options,
-            index=default_round_index,
+            key=f"{selected_competition}_fixture_set",
         )
 
     filtered = display_fixtures[display_fixtures["fixture_set"] == fixture_set]
-    filtered = filtered[filtered["round"] == selected_round]
+    if selected_competition == "World Cup":
+        available_rounds = filtered["round"].drop_duplicates().tolist()
+        round_options = sorted(available_rounds, key=round_sort_key)
+        fixture_records = filtered.to_dict("records")
+        default_round = get_current_round(fixture_records)
+        default_round_index = (
+            round_options.index(default_round)
+            if default_round in round_options
+            else 0
+        )
+
+        with control_cols[1]:
+            selected_filter = st.selectbox(
+                "Round",
+                round_options,
+                index=default_round_index,
+                key=f"{selected_competition}_round",
+            )
+        filtered = filtered[filtered["round"] == selected_filter]
+    else:
+        with control_cols[1]:
+            selected_filter = st.selectbox(
+                "Fixtures",
+                date_window_options(),
+                key=f"{selected_competition}_fixtures",
+            )
+        filtered = filter_by_date_window(filtered, selected_filter)
 
     with control_cols[2]:
+        neutral_label = "On" if competition_config["neutral"] else "Off"
+        st.segmented_control(
+            "Neutral venue",
+            [neutral_label],
+            default=neutral_label,
+            key=f"{selected_competition}_neutral_venue",
+        )
+
+    with control_cols[3]:
         export_page_size = 10
         total_export_pages = max(1, math.ceil(len(filtered) / export_page_size))
         export_page_options = [
@@ -3713,6 +3794,7 @@ def render_desktop_dashboard():
             selected_export_page_label = st.selectbox(
                 "Export page",
                 export_page_options,
+                key=f"{selected_competition}_export_page",
             )
             selected_export_page = export_page_options.index(selected_export_page_label) + 1
         else:
@@ -3724,13 +3806,14 @@ def render_desktop_dashboard():
             "Download image",
             data=build_export_image_bytes(
                 export_fixtures,
-                selected_round,
+                selected_filter,
                 selected_export_page,
                 total_export_pages,
+                selected_competition,
             ),
             file_name=(
-                "fpl-cartel-world-cup-odds-"
-                f"{selected_round.lower().replace(' ', '-')}-"
+                f"fpl-cartel-{selected_competition.lower().replace(' ', '-')}-odds-"
+                f"{selected_filter.lower().replace(' ', '-')}-"
                 f"page-{selected_export_page}.png"
             ),
             mime="image/png",
@@ -3747,7 +3830,7 @@ def render_desktop_dashboard():
     top_team_fixtures = display_fixtures[
         display_fixtures["fixture_set"] == fixture_set
     ]
-    render_top_teams_section(top_team_fixtures)
+    render_top_teams_section(top_team_fixtures, selected_competition)
 
     with st.expander("Fixture model debug", expanded=False):
         st.dataframe(
@@ -3760,6 +3843,15 @@ def render_desktop_dashboard():
         if api_error:
             st.error(api_error)
         st.json(raw_api_response)
+
+
+def render_desktop_dashboard():
+    desktop_styles()
+    world_cup_tab, premier_league_tab = st.tabs(["World Cup", "Premier League"])
+    with world_cup_tab:
+        render_competition_dashboard("World Cup")
+    with premier_league_tab:
+        render_competition_dashboard("Premier League")
 
 
 is_mobile = view == "mobile"
