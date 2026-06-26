@@ -455,22 +455,19 @@ def mobile_round_for_fixture(home_team, away_team, dt):
     if override:
         return override
 
-    if dt.month == 6 and dt.day <= 17:
+    if dt.month == 6 and dt.day <= 18:
         return "Round 1"
-    if dt.month == 6 and 18 <= dt.day <= 23:
+    if dt.month == 6 and 19 <= dt.day <= 24:
         return "Round 2"
-    if dt.month == 6 and dt.day >= 24:
+    if dt.month == 6 and 25 <= dt.day <= 27:
         return "Round 3"
+    if dt.month == 6 and dt.day >= 28:
+        return "Round of 32"
     return "Knockouts"
 
 
 def mobile_round_sort_key(round_name):
-    return {
-        "Round 1": 0,
-        "Round 2": 1,
-        "Round 3": 2,
-        "Knockouts": 3,
-    }.get(str(round_name), 99)
+    return round_sort_key(round_name)
 
 
 def mobile_extract_market(bookmaker, market_key):
@@ -2001,11 +1998,18 @@ def parse_commence_datetime(value):
     return parsed.astimezone(timezone.utc)
 
 
-ROUND_ORDER = {
-    "Round 1": 0,
-    "Round 2": 1,
-    "Round 3": 2,
-    "Knockouts": 3,
+ROUND_ORDER = [
+    "Round 1",
+    "Round 2",
+    "Round 3",
+    "Round of 32",
+    "Round of 16",
+    "Quarter-finals",
+    "Semi-finals",
+    "Final",
+]
+ROUND_ORDER_INDEX = {
+    round_name: index for index, round_name in enumerate(ROUND_ORDER)
 }
 
 ROUND_OVERRIDES = {
@@ -2027,20 +2031,23 @@ def get_round_for_fixture(home_team, away_team, dt):
     if override:
         return override
 
-    if dt.month == 6 and dt.day <= 17:
+    if dt.month == 6 and dt.day <= 18:
         return "Round 1"
 
-    if dt.month == 6 and 18 <= dt.day <= 23:
+    if dt.month == 6 and 19 <= dt.day <= 24:
         return "Round 2"
 
-    if dt.month == 6 and dt.day >= 24:
+    if dt.month == 6 and 25 <= dt.day <= 27:
         return "Round 3"
+
+    if dt.month == 6 and dt.day >= 28:
+        return "Round of 32"
 
     return "Knockouts"
 
 
 def round_sort_key(round_name):
-    return ROUND_ORDER.get(str(round_name), 99)
+    return ROUND_ORDER_INDEX.get(str(round_name), 99)
 
 
 def get_current_round(fixtures):

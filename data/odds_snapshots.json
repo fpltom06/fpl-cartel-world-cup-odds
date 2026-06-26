@@ -1918,5 +1918,261 @@
     "projected_goals": 2.5,
     "clean_sheet_pct": 61.0,
     "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "b86b4d60f773e9e3c46c00e9a6496e79",
+    "team": "Norway",
+    "projected_goals": 1.125,
+    "clean_sheet_pct": 12.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "b86b4d60f773e9e3c46c00e9a6496e79",
+    "team": "France",
+    "projected_goals": 2.125,
+    "clean_sheet_pct": 32.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "7e6aee294ea1a4792c59558791084528",
+    "team": "Senegal",
+    "projected_goals": 2.625,
+    "clean_sheet_pct": 54.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "7e6aee294ea1a4792c59558791084528",
+    "team": "Iraq",
+    "projected_goals": 0.625,
+    "clean_sheet_pct": 7.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "e07b1926be5a4d515c7eb108dbcee9c5",
+    "team": "Cape Verde",
+    "projected_goals": 1.125,
+    "clean_sheet_pct": 32.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "e07b1926be5a4d515c7eb108dbcee9c5",
+    "team": "Saudi Arabia",
+    "projected_goals": 1.125,
+    "clean_sheet_pct": 32.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "dcff2e31c0bce001a4db5caaf4fa8822",
+    "team": "Uruguay",
+    "projected_goals": 0.75,
+    "clean_sheet_pct": 22.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "dcff2e31c0bce001a4db5caaf4fa8822",
+    "team": "Spain",
+    "projected_goals": 1.5,
+    "clean_sheet_pct": 47.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "581691da05dcd75b5c6d3be91ee9d2ab",
+    "team": "New Zealand",
+    "projected_goals": 0.75,
+    "clean_sheet_pct": 5.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "581691da05dcd75b5c6d3be91ee9d2ab",
+    "team": "Belgium",
+    "projected_goals": 3.0,
+    "clean_sheet_pct": 47.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "3e3b5fa2b3c963e74cf044c60db0b573",
+    "team": "Egypt",
+    "projected_goals": 1.0,
+    "clean_sheet_pct": 47.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "3e3b5fa2b3c963e74cf044c60db0b573",
+    "team": "Iran",
+    "projected_goals": 0.75,
+    "clean_sheet_pct": 37.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "537c0997cd899394f47f16545b7068b2",
+    "team": "Croatia",
+    "projected_goals": 1.5,
+    "clean_sheet_pct": 47.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "537c0997cd899394f47f16545b7068b2",
+    "team": "Ghana",
+    "projected_goals": 0.75,
+    "clean_sheet_pct": 22.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "4be17c8e1ccfecb0f2a5ef79e045c415",
+    "team": "Panama",
+    "projected_goals": 0.5,
+    "clean_sheet_pct": 6.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "4be17c8e1ccfecb0f2a5ef79e045c415",
+    "team": "England",
+    "projected_goals": 2.75,
+    "clean_sheet_pct": 61.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "67ae5751c401a98409b8566ae4897069",
+    "team": "Colombia",
+    "projected_goals": 1.0,
+    "clean_sheet_pct": 22.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "67ae5751c401a98409b8566ae4897069",
+    "team": "Portugal",
+    "projected_goals": 1.5,
+    "clean_sheet_pct": 37.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "13eab94a136b9c264ba974cf437a5f71",
+    "team": "DR Congo",
+    "projected_goals": 1.625,
+    "clean_sheet_pct": 42.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "13eab94a136b9c264ba974cf437a5f71",
+    "team": "Uzbekistan",
+    "projected_goals": 0.875,
+    "clean_sheet_pct": 20.0,
+    "round": "Round 3"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "8756200e539155e571557c4f2e0d7f05",
+    "team": "Algeria",
+    "projected_goals": 0.75,
+    "clean_sheet_pct": 37.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "8756200e539155e571557c4f2e0d7f05",
+    "team": "Austria",
+    "projected_goals": 1.0,
+    "clean_sheet_pct": 47.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "54697f453437ab26276d773be1d72e9b",
+    "team": "Jordan",
+    "projected_goals": 0.5,
+    "clean_sheet_pct": 8.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "54697f453437ab26276d773be1d72e9b",
+    "team": "Argentina",
+    "projected_goals": 2.5,
+    "clean_sheet_pct": 61.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "def55b09ef3d6854e3c01e74b5c63415",
+    "team": "South Africa",
+    "projected_goals": 0.75,
+    "clean_sheet_pct": 22.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "def55b09ef3d6854e3c01e74b5c63415",
+    "team": "Canada",
+    "projected_goals": 1.5,
+    "clean_sheet_pct": 47.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "4f3d72fba877939d36a5315618184093",
+    "team": "Brazil",
+    "projected_goals": 1.5,
+    "clean_sheet_pct": 47.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "4f3d72fba877939d36a5315618184093",
+    "team": "Japan",
+    "projected_goals": 0.75,
+    "clean_sheet_pct": 22.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "5a34afe2de99513ba48360b983cfe80c",
+    "team": "Netherlands",
+    "projected_goals": 1.25,
+    "clean_sheet_pct": 37.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "5a34afe2de99513ba48360b983cfe80c",
+    "team": "Morocco",
+    "projected_goals": 1.0,
+    "clean_sheet_pct": 29.0,
+    "round": "Round of 32"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "9eeb4876001f5a52ce3c3641bd5f1f2f",
+    "team": "USA",
+    "projected_goals": 1.75,
+    "clean_sheet_pct": 47.0,
+    "round": "Knockouts"
+  },
+  {
+    "timestamp": "2026-06-26T11:21:31.228029+00:00",
+    "fixture_id": "9eeb4876001f5a52ce3c3641bd5f1f2f",
+    "team": "Bosnia & Herzegovina",
+    "projected_goals": 0.75,
+    "clean_sheet_pct": 17.0,
+    "round": "Knockouts"
   }
 ]
