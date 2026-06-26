@@ -1712,6 +1712,13 @@ DESKTOP_STYLE = (
             background: #f4f6f8;
         }
 
+        .team-club-badge {
+            object-fit: contain;
+            border-radius: 0;
+            box-shadow: none;
+            background: transparent;
+        }
+
         .team-flag-fallback {
             width: 28px;
             height: 28px;
@@ -2078,6 +2085,16 @@ def fetch_world_cup_odds():
     return fetch_odds(COMPETITIONS["World Cup"]["sport_key"])
 
 
+@st.cache_data(ttl=86400, show_spinner=False)
+def fetch_fpl_teams():
+    try:
+        response = requests.get(FPL_BOOTSTRAP_URL, timeout=12)
+        response.raise_for_status()
+        return response.json().get("teams", [])
+    except (requests.RequestException, ValueError, TypeError):
+        return []
+
+
 def team_badge(team_name):
     words = team_name.replace("-", " ").split()
     if not words:
@@ -2098,6 +2115,12 @@ def get_flag_url(team_name):
         return ""
 
     return f"https://flagcdn.com/w40/{code}.png"
+
+
+def get_team_badge_url(team_name, competition_name="World Cup"):
+    if competition_name == "Premier League":
+        return get_premier_league_badge_url(team_name)
+    return get_flag_url(team_name)
 
 
 def parse_commence_time(value):
@@ -2251,6 +2274,21 @@ TEAM_NAME_ALIASES = {
 }
 
 
+PL_BADGE_ALIASES = {
+    "Manchester United": "Man Utd",
+    "Manchester City": "Man City",
+    "Tottenham Hotspur": "Spurs",
+    "Brighton and Hove Albion": "Brighton",
+    "Brighton & Hove Albion": "Brighton",
+    "Nottingham Forest": "Nott'm Forest",
+    "Wolverhampton Wanderers": "Wolves",
+    "West Ham United": "West Ham",
+    "Newcastle United": "Newcastle",
+    "Leeds United": "Leeds",
+    "AFC Bournemouth": "Bournemouth",
+}
+
+
 def normalize_pl_team_name(team_name):
     canonical = TEAM_NAME_ALIASES.get(str(team_name or "").strip(), team_name)
     clean = str(canonical or "").lower()
@@ -2268,16 +2306,49 @@ def pl_team_similarity(left, right):
     ).ratio()
 
 
+def get_premier_league_badge_url(team_name):
+    if not team_name:
+        return ""
+
+    raw_name = str(team_name).strip()
+    alias_name = PL_BADGE_ALIASES.get(raw_name, raw_name)
+    normalized_targets = {
+        normalize_pl_team_name(raw_name),
+        normalize_pl_team_name(alias_name),
+    }
+
+    for team in fetch_fpl_teams():
+        code = team.get("code")
+        if not code:
+            continue
+        candidates = {
+            team.get("name", ""),
+            team.get("short_name", ""),
+            PL_BADGE_ALIASES.get(team.get("name", ""), team.get("name", "")),
+            PL_BADGE_ALIASES.get(team.get("short_name", ""), team.get("short_name", "")),
+        }
+        normalized_candidates = {
+            normalize_pl_team_name(candidate)
+            for candidate in candidates
+            if candidate
+        }
+        if normalized_targets & normalized_candidates:
+            return (
+                "https://resources.premierleague.com/premierleague/badges/"
+                f"70/t{code}.png"
+            )
+
+    return ""
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def fetch_fpl_fixture_schedule():
     try:
-        bootstrap = requests.get(FPL_BOOTSTRAP_URL, timeout=12)
-        bootstrap.raise_for_status()
         fixtures_response = requests.get(FPL_FIXTURES_URL, timeout=12)
         fixtures_response.raise_for_status()
         teams = {
             team["id"]: team["name"]
-            for team in bootstrap.json().get("teams", [])
+            for team in fetch_fpl_teams()
         }
         rows = []
         for fixture in fixtures_response.json():
@@ -2781,6 +2852,7 @@ CELL_COLORS = {
 }
 
 _FLAG_CACHE = {}
+_CLUB_BADGE_CACHE = {}
 
 
 def hex_to_rgb(hex_color):
@@ -2849,6 +2921,62 @@ def load_flag_image(team):
         return flag
     except Exception:
         return None
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def get_badge_bytes(url):
+    if not url:
+        return None
+
+    try:
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        return response.content
+    except requests.RequestException:
+        return None
+
+
+def load_club_badge_image(team):
+    badge_url = get_premier_league_badge_url(team)
+    if not badge_url:
+        return None
+
+    if badge_url in _CLUB_BADGE_CACHE:
+        return _CLUB_BADGE_CACHE[badge_url]
+
+    try:
+        badge_bytes = get_badge_bytes(badge_url)
+        if not badge_bytes:
+            return None
+        badge = Image.open(BytesIO(badge_bytes)).convert("RGBA")
+        badge.thumbnail((34, 34), Image.LANCZOS)
+        canvas = Image.new("RGBA", (34, 34), (0, 0, 0, 0))
+        offset = ((34 - badge.width) // 2, (34 - badge.height) // 2)
+        canvas.paste(badge, offset, badge)
+        _CLUB_BADGE_CACHE[badge_url] = canvas
+        return canvas
+    except Exception:
+        return None
+
+
+def draw_team_badge(img, draw, team, x, y, font, competition_name="World Cup"):
+    if competition_name == "Premier League":
+        badge = load_club_badge_image(team)
+        if badge is not None:
+            img.paste(badge, (int(x), int(y)), badge)
+            return
+
+        draw.ellipse((x, y, x + 34, y + 34), fill=hex_to_rgb("#e5e7eb"))
+        draw_text_center(
+            draw,
+            (x, y, x + 34, y + 34),
+            "\u26bd",
+            font,
+            hex_to_rgb("#64748b"),
+        )
+        return
+
+    draw_flag_badge(img, draw, team, x, y, font)
 
 
 def draw_flag_badge(img, draw, team, x, y, font):
@@ -3070,7 +3198,15 @@ def build_leaderboard_image(
         )
         x += rank_w
 
-        draw_flag_badge(img, draw, row["team"], x + 20, row_top + 35, header_font)
+        draw_team_badge(
+            img,
+            draw,
+            row["team"],
+            x + 20,
+            row_top + 30,
+            header_font,
+            competition_name,
+        )
         draw_text_fit(
             draw,
             (x + 66, row_top + 32),
@@ -3297,8 +3433,24 @@ def build_export_image(fixtures_to_show, selected_round, competition_name="World
 
         home_row_y = y + HEADER_H
         away_row_y = y + HEADER_H + ROW_H
-        draw_flag_badge(img, draw, row.home_team, team_x + 24, home_row_y + 15, badge_font)
-        draw_flag_badge(img, draw, row.away_team, team_x + 24, away_row_y + 15, badge_font)
+        draw_team_badge(
+            img,
+            draw,
+            row.home_team,
+            team_x + 24,
+            home_row_y + 10,
+            badge_font,
+            competition_name,
+        )
+        draw_team_badge(
+            img,
+            draw,
+            row.away_team,
+            team_x + 24,
+            away_row_y + 10,
+            badge_font,
+            competition_name,
+        )
         draw.text((team_x + 72, home_row_y + 13), str(row.home_team), font=team_font, fill=hex_to_rgb("#111827"))
         draw.text((team_x + 72, away_row_y + 13), str(row.away_team), font=team_font, fill=hex_to_rgb("#111827"))
 
@@ -3387,17 +3539,22 @@ def build_export_with_pil(fixtures_to_show, selected_round, export_page, total_e
     return build_export_image(fixtures_to_show, export_title, competition_name)
 
 
-def render_export_team_flag(team_name):
-    flag_url = get_flag_url(team_name)
-    if not flag_url:
+def render_export_team_flag(team_name, competition_name="World Cup"):
+    badge_url = get_team_badge_url(team_name, competition_name)
+    if not badge_url:
         return '<span class="export-flag-fallback" aria-hidden="true">&#9917;</span>'
+    badge_class = (
+        "export-flag export-club-badge"
+        if competition_name == "Premier League"
+        else "export-flag"
+    )
     return (
-        f'<img class="export-flag" src="{escape(flag_url)}" '
-        f'alt="{escape(str(team_name))} flag">'
+        f'<img class="{badge_class}" src="{escape(badge_url)}" '
+        f'alt="{escape(str(team_name))} badge">'
     )
 
 
-def render_export_fixture_card(row):
+def render_export_fixture_card(row, competition_name="World Cup"):
     return (
         '<article class="export-card">'
         '<div class="export-date">'
@@ -3406,11 +3563,11 @@ def render_export_fixture_card(row):
         '</div>'
         '<div class="export-teams">'
         '<div class="export-team-row">'
-        f'{render_export_team_flag(row.home_team)}'
+        f'{render_export_team_flag(row.home_team, competition_name)}'
         f'<span class="export-team-name">{escape(str(row.home_team))}</span>'
         '</div>'
         '<div class="export-team-row">'
-        f'{render_export_team_flag(row.away_team)}'
+        f'{render_export_team_flag(row.away_team, competition_name)}'
         f'<span class="export-team-name">{escape(str(row.away_team))}</span>'
         '</div>'
         '</div>'
@@ -3430,7 +3587,7 @@ def render_export_fixture_card(row):
 
 def build_export_html(fixtures_to_show, selected_round, export_page, total_export_pages, competition_name="World Cup"):
     cards = "\n".join(
-        render_export_fixture_card(row)
+        render_export_fixture_card(row, competition_name)
         for row in fixtures_to_show.head(10).itertuples(index=False)
     )
     subtitle = (
@@ -3562,6 +3719,13 @@ def build_export_html(fixtures_to_show, selected_round, export_page, total_expor
       flex: 0 0 30px;
     }}
 
+    .export-club-badge {{
+      object-fit: contain;
+      border-radius: 0;
+      box-shadow: none;
+      background: transparent;
+    }}
+
     .export-flag-fallback {{
       width: 30px;
       height: 30px;
@@ -3682,13 +3846,18 @@ def build_export_html(fixtures_to_show, selected_round, export_page, total_expor
 </html>"""
 
 
-def render_team_flag(team_name):
-    flag_url = get_flag_url(team_name)
-    if not flag_url:
+def render_team_flag(team_name, competition_name="World Cup"):
+    badge_url = get_team_badge_url(team_name, competition_name)
+    if not badge_url:
         return '<div class="team-flag-fallback" aria-hidden="true">&#9917;</div>'
+    badge_class = (
+        "team-flag team-club-badge"
+        if competition_name == "Premier League"
+        else "team-flag"
+    )
     return (
-        f'<img class="team-flag" src="{escape(flag_url)}" '
-        f'alt="{escape(team_name)} flag" '
+        f'<img class="{badge_class}" src="{escape(badge_url)}" '
+        f'alt="{escape(team_name)} badge" '
         'loading="lazy" decoding="async" '
         'onerror="this.style.display=\'none\'; '
         'this.nextElementSibling.style.display=\'flex\';">'
@@ -3710,7 +3879,8 @@ def render_metric_cell(value, metric, class_name):
     )
 
 
-def render_fixture_card(row):
+def render_fixture_card(row, competition_name=None):
+    row_competition = competition_name or getattr(row, "fixture_set", "World Cup")
     note = getattr(row, "odds_note", "") or ""
     note_html = (
         f'<div class="fixture-note">{escape(str(note))}</div>'
@@ -3725,11 +3895,11 @@ def render_fixture_card(row):
         "</div>"
         '<div class="fixture-teams">'
         '<div class="team-row">'
-        f"{render_team_flag(row.home_team)}"
+        f"{render_team_flag(row.home_team, row_competition)}"
         f'<div class="team-name">{escape(row.home_team)}</div>'
         "</div>"
         '<div class="team-row">'
-        f"{render_team_flag(row.away_team)}"
+        f"{render_team_flag(row.away_team, row_competition)}"
         f'<div class="team-name">{escape(row.away_team)}</div>'
         "</div></div>"
         '<div class="projection-col">'
@@ -3748,11 +3918,12 @@ def render_fixture_card(row):
     )
 
 
-def render_fixture_groups(fixtures):
+def render_fixture_groups(fixtures, competition_name="World Cup"):
     groups_html = []
     for date, date_fixtures in fixtures.groupby("date", sort=False):
         cards = "\n".join(
-            render_fixture_card(row) for row in date_fixtures.itertuples(index=False)
+            render_fixture_card(row, competition_name)
+            for row in date_fixtures.itertuples(index=False)
         )
         groups_html.append(
             '<section class="date-group">'
@@ -3763,9 +3934,10 @@ def render_fixture_groups(fixtures):
     return "\n".join(groups_html)
 
 
-def render_fixture_group(fixtures, heading):
+def render_fixture_group(fixtures, heading, competition_name="World Cup"):
     cards = "\n".join(
-        render_fixture_card(row) for row in fixtures.itertuples(index=False)
+        render_fixture_card(row, competition_name)
+        for row in fixtures.itertuples(index=False)
     )
     return (
         '<section class="date-group">'
@@ -3789,7 +3961,12 @@ def render_top_team_value_cell(cell, metric_key):
     )
 
 
-def render_leaderboard_table(fixtures, metric_key, selected_rounds):
+def render_leaderboard_table(
+    fixtures,
+    metric_key,
+    selected_rounds,
+    competition_name="World Cup",
+):
     rows = build_leaderboard_rows(fixtures, metric_key, selected_rounds)
     if not rows:
         return '<div class="empty-note">No team ranking data available yet.</div>'
@@ -3815,7 +3992,7 @@ def render_leaderboard_table(fixtures, metric_key, selected_rounds):
             "<tr>"
             f'<td class="top-rank-cell"><span class="top-rank">{index}</span></td>'
             '<td class="top-team-cell">'
-            f"{render_team_flag(row['team'])}"
+            f"{render_team_flag(row['team'], competition_name)}"
             f'<span>{escape(str(row["team"]))}</span>'
             "</td>"
             f"{round_cells}"
@@ -3874,7 +4051,12 @@ def render_top_teams_section(fixtures, competition_name="World Cup", leaderboard
     goals_tab, cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
     with goals_tab:
         st.markdown(
-            render_leaderboard_table(fixtures, "projected_goals", selected_rounds),
+            render_leaderboard_table(
+                fixtures,
+                "projected_goals",
+                selected_rounds,
+                competition_name,
+            ),
             unsafe_allow_html=True,
         )
         st.download_button(
@@ -3895,7 +4077,12 @@ def render_top_teams_section(fixtures, competition_name="World Cup", leaderboard
         )
     with cs_tab:
         st.markdown(
-            render_leaderboard_table(fixtures, "clean_sheet_pct", selected_rounds),
+            render_leaderboard_table(
+                fixtures,
+                "clean_sheet_pct",
+                selected_rounds,
+                competition_name,
+            ),
             unsafe_allow_html=True,
         )
         st.download_button(
@@ -3916,11 +4103,11 @@ def render_top_teams_section(fixtures, competition_name="World Cup", leaderboard
         )
 
 
-def render_export_area(fixtures, group_heading=None):
+def render_export_area(fixtures, group_heading=None, competition_name="World Cup"):
     fixture_html = (
-        render_fixture_group(fixtures, group_heading)
+        render_fixture_group(fixtures, group_heading, competition_name)
         if group_heading
-        else render_fixture_groups(fixtures)
+        else render_fixture_groups(fixtures, competition_name)
     )
     return (
         '<section class="export-area">'
@@ -4115,7 +4302,10 @@ def render_competition_dashboard(selected_competition):
         )
     else:
         group_heading = selected_filter if selected_competition == "Premier League" else None
-        st.markdown(render_export_area(filtered, group_heading), unsafe_allow_html=True)
+        st.markdown(
+            render_export_area(filtered, group_heading, selected_competition),
+            unsafe_allow_html=True,
+        )
 
     top_team_fixtures = (
         filtered
