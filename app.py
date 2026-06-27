@@ -886,7 +886,14 @@ def fetch_odds(sport_key):
         )
         status_code = response.status_code
         if status_code != 200:
-            return [], f"The Odds API returned status code {status_code}.", status_code, None
+            response_message = response.text.strip()
+            detail = f" Response: {response_message[:500]}" if response_message else ""
+            return (
+                [],
+                f"The Odds API returned status code {status_code}.{detail}",
+                status_code,
+                None,
+            )
         return response.json(), None, status_code, datetime.now(timezone.utc)
     except requests.RequestException as exc:
         status_code = getattr(getattr(exc, "response", None), "status_code", None)
@@ -5060,6 +5067,61 @@ def efl_bookmaker_quality_counts(fixtures):
     return counts
 
 
+def efl_projection_counts(fixtures):
+    counts = {
+        "Fixtures with projected goals": 0,
+        "Fixtures unavailable": 0,
+    }
+    if fixtures is None or fixtures.empty:
+        return counts
+
+    has_projection = fixtures["home_xg"].notna() & fixtures["away_xg"].notna()
+    counts["Fixtures with projected goals"] = int(has_projection.sum())
+    counts["Fixtures unavailable"] = int((~has_projection).sum())
+    return counts
+
+
+def build_efl_debug_counts(fixtures, current_efl_fixtures, league_event_counts):
+    all_count = 0 if fixtures is None else len(fixtures)
+    current_count = 0 if current_efl_fixtures is None else len(current_efl_fixtures)
+    counts = {
+        "Championship returned": league_event_counts.get("Championship", 0),
+        "League One returned": league_event_counts.get("League One", 0),
+        "League Two returned": league_event_counts.get("League Two", 0),
+        "Total raw EFL fixtures": all_count,
+        "Current EFL GW fixtures": current_count,
+        "All available fixtures": all_count,
+    }
+    counts.update(efl_projection_counts(fixtures))
+    counts.update(efl_bookmaker_quality_counts(fixtures))
+    return counts
+
+
+def render_efl_debug_panel(fixtures, current_efl_fixtures, league_event_counts, api_debug_rows):
+    st.markdown("#### EFL fixture debug")
+    st.caption(
+        "Raw API counts, merged fixture coverage, EFL GW filtering, and odds parsing status."
+    )
+    st.dataframe(
+        pd.DataFrame(
+            [
+                build_efl_debug_counts(
+                    fixtures,
+                    current_efl_fixtures,
+                    league_event_counts,
+                )
+            ]
+        ),
+        use_container_width=True,
+        hide_index=True,
+    )
+    st.dataframe(
+        pd.DataFrame(api_debug_rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+
 def render_efl_dashboard():
     desktop_styles()
     source_note = "Live odds via The Odds API &middot; Pinnacle, Bet365, then best available"
@@ -5074,10 +5136,20 @@ def render_efl_dashboard():
     raw_payloads = {}
     last_updates = []
     league_event_counts = {}
+    api_debug_rows = []
     for league_name, sport_key in EFL_COMPETITIONS.items():
         payload, error, _status_code, last_updated = fetch_odds(sport_key)
         raw_payloads[league_name] = payload
         league_event_counts[league_name] = len(payload or [])
+        api_debug_rows.append(
+            {
+                "league": league_name,
+                "sport_key": sport_key,
+                "status_code": _status_code or "",
+                "events_returned": len(payload or []),
+                "response_message": error or "OK",
+            }
+        )
         if error:
             errors.append(f"{league_name}: {error}")
             continue
@@ -5099,19 +5171,13 @@ def render_efl_dashboard():
                 st.warning(error)
 
     if not frames:
-        coverage_counts = {
-            f"{league_name} events returned": league_event_counts.get(league_name, 0)
-            for league_name in EFL_COMPETITIONS
-        }
-        coverage_counts["Total merged events"] = 0
-        coverage_counts["Total after EFL GW filter"] = 0
-        coverage_counts.update(efl_bookmaker_quality_counts(pd.DataFrame()))
-        with st.expander("EFL fixture coverage debug", expanded=True):
-            st.dataframe(
-                pd.DataFrame([coverage_counts]),
-                use_container_width=True,
-                hide_index=True,
-            )
+        empty_fixtures = pd.DataFrame()
+        render_efl_debug_panel(
+            empty_fixtures,
+            empty_fixtures,
+            league_event_counts,
+            api_debug_rows,
+        )
         st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
         return
 
@@ -5127,20 +5193,13 @@ def render_efl_dashboard():
         key="EFL Fantasy_range",
     )
     filtered = filter_by_efl_range(fixtures, selected_range)
-    coverage_counts = {
-        f"{league_name} events returned": league_event_counts.get(league_name, 0)
-        for league_name in EFL_COMPETITIONS
-    }
-    coverage_counts["Total merged events"] = len(fixtures)
-    coverage_counts["Total after EFL GW filter"] = len(filtered)
-    coverage_counts.update(efl_bookmaker_quality_counts(filtered))
-
-    with st.expander("EFL fixture coverage debug", expanded=False):
-        st.dataframe(
-            pd.DataFrame([coverage_counts]),
-            use_container_width=True,
-            hide_index=True,
-        )
+    current_efl_fixtures = filter_by_efl_range(fixtures, "Current EFL GW")
+    render_efl_debug_panel(
+        fixtures,
+        current_efl_fixtures,
+        league_event_counts,
+        api_debug_rows,
+    )
 
     if filtered.empty:
         st.markdown(
