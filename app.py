@@ -3301,8 +3301,8 @@ def build_export_image(fixtures_to_show, selected_round, competition_name="World
     CARD_RADIUS = 10
     BORDER = 2
     INNER_PAD = 2
-    DATE_W = 120
-    TEAM_W = 515
+    DATE_W = 108
+    TEAM_W = 527
     PROJ_W = 120
     CS_W = 120
     HEADER_H = 32
@@ -3319,8 +3319,8 @@ def build_export_image(fixtures_to_show, selected_round, competition_name="World
     title_font = load_font(48, bold=True)
     subtitle_font = load_font(24)
     link_font = load_font(17)
-    date_font = load_font(18, bold=True)
-    time_font = load_font(17)
+    date_font = load_font(16, bold=True)
+    time_font = load_font(15)
     team_font = load_font(25, bold=True)
     header_font = load_font(14, bold=True)
     metric_font = load_font(30, bold=True)
@@ -3418,14 +3418,14 @@ def build_export_image(fixtures_to_show, selected_round, competition_name="World
 
         draw_text_center(
             draw,
-            (date_x + 8, y + 22, team_x - 8, y + 68),
+            (date_x + 8, y + 28, team_x - 8, y + 66),
             str(row.date),
             date_font,
             hex_to_rgb("#111827"),
         )
         draw_text_center(
             draw,
-            (date_x + 8, y + 68, team_x - 8, y + 112),
+            (date_x + 8, y + 74, team_x - 8, y + 112),
             str(row.kickoff),
             time_font,
             hex_to_rgb("#4b5563"),
@@ -3655,7 +3655,7 @@ def build_export_html(fixtures_to_show, selected_round, export_page, total_expor
       width: 850px;
       height: 135px;
       display: grid;
-      grid-template-columns: 115px 435px 145px 155px;
+      grid-template-columns: 104px 446px 145px 155px;
       overflow: hidden;
       background: #ffffff;
       border: 1px solid #d8dee8;
@@ -3670,20 +3670,20 @@ def build_export_html(fixtures_to_show, selected_round, export_page, total_expor
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 5px;
+      gap: 7px;
       text-align: center;
-      padding: 12px 8px;
+      padding: 16px 8px;
     }}
 
     .export-date strong {{
-      font-size: 18px;
+      font-size: 16px;
       line-height: 1.12;
       font-weight: 900;
     }}
 
     .export-date span {{
       color: #4b5563;
-      font-size: 17px;
+      font-size: 15px;
       line-height: 1;
       font-weight: 800;
     }}
