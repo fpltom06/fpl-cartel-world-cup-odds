@@ -2424,11 +2424,62 @@ def slugify_team_name(name):
     )
 
 
+EFL_BADGE_ALIASES = {
+    "AFC Wimbledon": "AFC Wimbledon",
+    "Bolton Wanderers": "Bolton",
+    "Bradford City": "Bradford",
+    "Cambridge United": "Cambridge",
+    "Crawley Town": "Crawley",
+    "Doncaster Rovers": "Doncaster",
+    "Fleetwood Town": "Fleetwood",
+    "Huddersfield Town": "Huddersfield",
+    "Lincoln City": "Lincoln City",
+    "Luton Town": "Luton",
+    "Newport County": "Newport",
+    "Northampton Town": "Northampton",
+    "Oldham Athletic": "Oldham",
+    "Peterborough United": "Peterborough",
+    "Port Vale": "Port Vale",
+    "Preston North End": "Preston",
+    "Queens Park Rangers": "Queens Park Rangers",
+    "Rochdale": "Rochdale",
+    "Shrewsbury Town": "Shrewsbury Town",
+    "Stoke City": "Stoke City",
+    "Swansea City": "Swansea",
+    "Swindon Town": "Swindon",
+    "Wigan Athletic": "Wigan",
+    "Wrexham": "Wrexham",
+}
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def efl_badge_file_index():
+    badge_dir = Path("assets/efl_badges")
+    if not badge_dir.exists():
+        return {}
+
+    index = {}
+    for badge_path in badge_dir.glob("*.png"):
+        index[slugify_team_name(badge_path.stem)] = str(badge_path)
+    return index
+
+
 def get_efl_badge_path(team_name):
-    slug = slugify_team_name(team_name)
-    path = f"assets/efl_badges/{slug}.png"
-    if os.path.exists(path):
-        return path
+    candidates = [
+        str(team_name or "").strip(),
+        EFL_BADGE_ALIASES.get(str(team_name or "").strip(), ""),
+    ]
+    badge_index = efl_badge_file_index()
+    for candidate in candidates:
+        if not candidate:
+            continue
+        slug = slugify_team_name(candidate)
+        path = f"assets/efl_badges/{slug}.png"
+        if os.path.exists(path):
+            return path
+        indexed_path = badge_index.get(slug)
+        if indexed_path and os.path.exists(indexed_path):
+            return indexed_path
     return None
 
 
