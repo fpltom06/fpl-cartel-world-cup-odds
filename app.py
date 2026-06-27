@@ -8,6 +8,7 @@ from difflib import SequenceMatcher
 from html import escape
 from io import BytesIO
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -59,6 +60,17 @@ COMPETITIONS = {
         "neutral": False,
     },
 }
+EFL_COMPETITIONS = {
+    "Championship": "soccer_efl_champ",
+    "League One": "soccer_england_league1",
+    "League Two": "soccer_england_league2",
+}
+EFL_RANGE_OPTIONS = [
+    "All available fixtures",
+    "Current EFL GW",
+    "Next EFL GW",
+]
+UK_TZ = ZoneInfo("Europe/London")
 NO_LIVE_ODDS_MESSAGE = (
     "No live betting odds available yet. This usually happens when fixtures "
     "are too far away or markets are not open."
@@ -528,11 +540,29 @@ def is_pinnacle_bookmaker(bookmaker):
     return key == "pinnacle" or title == "pinnacle"
 
 
+def is_bet365_bookmaker(bookmaker):
+    key = str(bookmaker.get("key", "")).lower()
+    title = str(bookmaker.get("title", "")).lower()
+    return key == "bet365" or title == "bet365"
+
+
 def find_pinnacle_bookmaker(event):
     for bookmaker in event.get("bookmakers", []):
         if is_pinnacle_bookmaker(bookmaker):
             return bookmaker
     return None
+
+
+def find_efl_bookmaker(event, home_team):
+    for matcher in (is_pinnacle_bookmaker, is_bet365_bookmaker):
+        for bookmaker in event.get("bookmakers", []):
+            if not matcher(bookmaker):
+                continue
+            total_line = extract_total(bookmaker)
+            home_spread = extract_spread(bookmaker, home_team)
+            if total_line is not None and home_spread is not None:
+                return bookmaker, total_line, home_spread
+    return None, None, None
 
 
 def extract_h2h_probabilities(bookmaker, home_team, away_team):
@@ -614,6 +644,30 @@ def project_goals_from_event(event):
         away_team,
     )
     debug["h2h_used"] = h2h_used
+    return home_goals, away_goals, debug
+
+
+def project_efl_goals_from_event(event):
+    home_team = event.get("home_team")
+    debug = {
+        "bookmaker_used": "Unavailable",
+        "total_line": None,
+        "spread_line": None,
+        "h2h_used": False,
+        "btts_used": False,
+        "correct_score_used": False,
+    }
+    if not home_team:
+        return None, None, debug
+
+    bookmaker, total_line, home_spread = find_efl_bookmaker(event, home_team)
+    if bookmaker is None:
+        return None, None, debug
+
+    debug["bookmaker_used"] = bookmaker.get("title") or bookmaker.get("key") or "Bookmaker"
+    debug["total_line"] = total_line
+    debug["spread_line"] = home_spread
+    home_goals, away_goals = calculate_team_goal_projections(total_line, home_spread)
     return home_goals, away_goals, debug
 
 
@@ -1630,8 +1684,24 @@ DESKTOP_STYLE = (
         }
 
         .fixture-card-wrap {
+            position: relative;
             display: grid;
             gap: 0.35rem;
+        }
+
+        .league-label {
+            position: absolute;
+            left: 0.72rem;
+            top: 0.38rem;
+            z-index: 2;
+            background: #edf3f8;
+            border: 1px solid #d8dee8;
+            border-radius: 999px;
+            padding: 0.16rem 0.45rem;
+            color: #4b5563;
+            font-size: 0.67rem;
+            font-weight: 850;
+            line-height: 1;
         }
 
         .fixture-note {
@@ -2118,7 +2188,7 @@ def get_flag_url(team_name):
 
 
 def get_team_badge_url(team_name, competition_name="World Cup"):
-    if competition_name == "Premier League":
+    if competition_name in ("Premier League", "EFL Fantasy"):
         return get_premier_league_badge_url(team_name)
     return get_flag_url(team_name)
 
@@ -2658,6 +2728,79 @@ def parse_odds_response(payload, competition_name="World Cup"):
     return pd.DataFrame(rows).sort_values("commence_time_dt")
 
 
+def parse_efl_odds_response(payload, league_name):
+    rows = []
+    for event in payload or []:
+        commence_time = event.get("commence_time")
+        date_label, kickoff, _unused_label = parse_commence_time(commence_time)
+        commence_time_dt = parse_commence_datetime(commence_time)
+        home_team = event.get("home_team", "Home team")
+        away_team = event.get("away_team", "Away team")
+        home_xg, away_xg, debug = project_efl_goals_from_event(event)
+        total_line = debug["total_line"]
+        home_spread = debug["spread_line"]
+        odds_note = (
+            "Pinnacle/Bet365 odds unavailable"
+            if total_line is None or home_spread is None
+            else ""
+        )
+
+        rows.append(
+            {
+                "fixture_id": event.get("id")
+                or make_fixture_id(commence_time, home_team, away_team),
+                "date": date_label,
+                "kickoff": kickoff,
+                "round": "EFL Fantasy",
+                "commence_time": commence_time,
+                "commence_time_dt": commence_time_dt,
+                "fixture_set": "EFL Fantasy",
+                "league_label": league_name,
+                "home_team": home_team,
+                "away_team": away_team,
+                "home_badge": team_badge(home_team),
+                "away_badge": team_badge(away_team),
+                "home_xg": home_xg,
+                "away_xg": away_xg,
+                "home_cs": calculate_clean_sheet_percent(away_xg),
+                "away_cs": calculate_clean_sheet_percent(home_xg),
+                "total_line": total_line,
+                "home_spread": home_spread,
+                "bookmaker_used": debug["bookmaker_used"],
+                "h2h_used": debug["h2h_used"],
+                "btts_used": debug["btts_used"],
+                "correct_score_used": debug["correct_score_used"],
+                "odds_note": odds_note,
+                "delta": "Live odds",
+                "source": "api",
+            }
+        )
+
+    return pd.DataFrame(rows)
+
+
+def efl_gw_window(offset_weeks=0):
+    now_uk = datetime.now(UK_TZ)
+    days_since_thursday = (now_uk.weekday() - 3) % 7
+    start_date = now_uk.date() - pd.Timedelta(days=days_since_thursday)
+    start_date = start_date + pd.Timedelta(days=offset_weeks * 7)
+    start = datetime.combine(start_date, datetime.min.time(), tzinfo=UK_TZ)
+    end = start + pd.Timedelta(days=7) - pd.Timedelta(seconds=1)
+    return start, end
+
+
+def filter_by_efl_range(fixtures, selected_range):
+    if fixtures.empty or selected_range == "All available fixtures":
+        return fixtures
+
+    offset = 0 if selected_range == "Current EFL GW" else 1
+    start, end = efl_gw_window(offset)
+    local_times = fixtures["commence_time_dt"].apply(
+        lambda dt: dt.astimezone(UK_TZ) if dt.tzinfo else dt.replace(tzinfo=timezone.utc).astimezone(UK_TZ)
+    )
+    return fixtures[(local_times >= start) & (local_times <= end)]
+
+
 def format_projected_goals(value):
     if value is None or pd.isna(value):
         return "-"
@@ -2813,6 +2956,51 @@ def build_leaderboard_rows(fixtures, metric_key, selected_rounds, top_n=10):
     return output_rows
 
 
+def build_efl_leaderboard_rows(fixtures, metric_key, top_n=10):
+    team_rows = build_team_round_rows(fixtures)
+    if team_rows.empty or metric_key not in team_rows.columns:
+        return []
+
+    team_rows = team_rows[
+        team_rows["team"].notna() & team_rows[metric_key].notna()
+    ].copy()
+    if team_rows.empty:
+        return []
+
+    team_rows = team_rows.sort_values(["team", metric_key], ascending=[True, False])
+    ranking = (
+        team_rows.groupby("team", as_index=False)[metric_key]
+        .sum()
+        .rename(columns={metric_key: "total"})
+        .sort_values("total", ascending=False)
+        .head(top_n)
+    )
+
+    output_rows = []
+    for team, total in ranking[["team", "total"]].itertuples(index=False):
+        fixtures_for_team = team_rows[team_rows["team"] == team].sort_values(
+            metric_key,
+            ascending=False,
+        )
+        fixture_cells = [
+            {
+                "opponent": row.opponent,
+                "projected_goals": row.projected_goals,
+                "clean_sheet_pct": row.clean_sheet_pct,
+            }
+            for row in fixtures_for_team.itertuples(index=False)
+        ]
+        output_rows.append(
+            {
+                "team": team,
+                "fixtures": fixture_cells,
+                "total": total,
+            }
+        )
+
+    return output_rows
+
+
 def goal_cell_class(value):
     if value is None or pd.isna(value):
         return "cell-empty"
@@ -2960,7 +3148,7 @@ def load_club_badge_image(team):
 
 
 def draw_team_badge(img, draw, team, x, y, font, competition_name="World Cup"):
-    if competition_name == "Premier League":
+    if competition_name in ("Premier League", "EFL Fantasy"):
         badge = load_club_badge_image(team)
         if badge is not None:
             img.paste(badge, (int(x), int(y)), badge)
@@ -3281,6 +3469,164 @@ def build_leaderboard_image(
     draw.line((MARGIN_X, footer_divider_y, EXPORT_W - MARGIN_X, footer_divider_y), fill=hex_to_rgb("#d1d5db"), width=2)
     draw.text((MARGIN_X, footer_text_y), "Graphics by FPL Cartel", font=footer_font, fill=hex_to_rgb("#111827"))
     draw.text((EXPORT_W - 430, footer_text_y), "Source: Pinnacle odds via The Odds API", font=footer_font, fill=hex_to_rgb("#111827"))
+
+    output = BytesIO()
+    img.save(output, format="PNG")
+    output.seek(0)
+    return output
+
+
+def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
+    EXPORT_W = 1080
+    EXPORT_H = 1350
+    BG = "#f3f6f9"
+    MARGIN_X = 55
+    TABLE_TOP = 178
+    HEADER_H = 50
+    ROW_H = 94
+
+    img = Image.new("RGB", (EXPORT_W, EXPORT_H), hex_to_rgb(BG))
+    draw = ImageDraw.Draw(img)
+
+    title_font = load_font(38, bold=True)
+    subtitle_font = load_font(22)
+    link_font = load_font(16)
+    header_font = load_font(15, bold=True)
+    rank_font = load_font(22, bold=True)
+    team_font = load_font(25, bold=True)
+    opponent_font = load_font(18, bold=True)
+    value_font = load_font(28, bold=True)
+    total_font = load_font(34, bold=True)
+    footer_font = load_font(18)
+
+    logo = load_export_logo(66)
+    img.paste(logo, (MARGIN_X, 30), logo)
+    draw.text((MARGIN_X + 84, 29), metric_title(metric_key), font=title_font, fill=hex_to_rgb("#111827"))
+    draw.text((MARGIN_X + 86, 77), "FPL Cartel EFL Fantasy Odds Dashboard", font=link_font, fill=hex_to_rgb("#64748b"))
+    draw.text((MARGIN_X, 120), leaderboard_range, font=subtitle_font, fill=hex_to_rgb("#4b5563"))
+
+    rows = build_efl_leaderboard_rows(fixtures, metric_key)
+    max_fixture_cols = max(
+        1,
+        max((len(row["fixtures"]) for row in rows), default=1),
+    )
+    max_fixture_cols = min(max_fixture_cols, 3)
+
+    table_left = MARGIN_X
+    table_right = EXPORT_W - MARGIN_X
+    table_w = table_right - table_left
+    rank_w = 72
+    team_w = 300
+    total_w = 150
+    fixture_w = (table_w - rank_w - team_w - total_w) / max_fixture_cols
+    col_widths = [rank_w, team_w] + [fixture_w] * max_fixture_cols + [total_w]
+    table_h = HEADER_H + min(10, len(rows)) * ROW_H
+
+    draw.rounded_rectangle(
+        (table_left, TABLE_TOP, table_right, TABLE_TOP + table_h),
+        radius=18,
+        fill=hex_to_rgb("#ffffff"),
+        outline=hex_to_rgb("#d8dee8"),
+        width=2,
+    )
+    draw.rounded_rectangle(
+        (table_left, TABLE_TOP, table_right, TABLE_TOP + HEADER_H),
+        radius=18,
+        fill=hex_to_rgb("#f5f7fa"),
+    )
+    draw.rectangle(
+        (table_left, TABLE_TOP + HEADER_H - 20, table_right, TABLE_TOP + HEADER_H),
+        fill=hex_to_rgb("#f5f7fa"),
+    )
+
+    headers = ["Rank", "Team"] + [
+        f"Fixture {index}" for index in range(1, max_fixture_cols + 1)
+    ] + ["Total"]
+    x = table_left
+    for header, width in zip(headers, col_widths):
+        draw_text_center(
+            draw,
+            (x, TABLE_TOP, x + width, TABLE_TOP + HEADER_H),
+            header.upper(),
+            header_font,
+            hex_to_rgb("#64748b"),
+        )
+        x += width
+
+    y = TABLE_TOP + HEADER_H
+    draw.line((table_left, y, table_right, y), fill=hex_to_rgb("#d8dee8"), width=1)
+
+    for index, row in enumerate(rows[:10], start=1):
+        row_top = TABLE_TOP + HEADER_H + (index - 1) * ROW_H
+        row_bottom = row_top + ROW_H
+        draw.line((table_left, row_bottom, table_right, row_bottom), fill=hex_to_rgb("#edf1f5"), width=1)
+
+        x = table_left
+        draw_text_center(draw, (x, row_top, x + rank_w, row_bottom), str(index), rank_font, hex_to_rgb("#64748b"))
+        x += rank_w
+
+        draw_team_badge(img, draw, row["team"], x + 20, row_top + 30, header_font, "EFL Fantasy")
+        draw_text_fit(draw, (x + 66, row_top + 32), row["team"], team_font, hex_to_rgb("#111827"), team_w - 82)
+        x += team_w
+
+        for fixture_index in range(max_fixture_cols):
+            cell = row["fixtures"][fixture_index] if fixture_index < len(row["fixtures"]) else None
+            if cell:
+                draw_wrapped_text_center(
+                    draw,
+                    (x + 10, row_top + 9, x + fixture_w - 10, row_top + 50),
+                    cell["opponent"],
+                    opponent_font,
+                    hex_to_rgb("#111827"),
+                    max_lines=2,
+                    line_height=1.15,
+                )
+                draw_text_center(
+                    draw,
+                    (x, row_top + 50, x + fixture_w, row_bottom - 6),
+                    format_leaderboard_value(cell[metric_key], metric_key),
+                    value_font,
+                    hex_to_rgb("#0f7a45"),
+                )
+            else:
+                draw_text_center(
+                    draw,
+                    (x, row_top, x + fixture_w, row_bottom),
+                    "-",
+                    value_font,
+                    hex_to_rgb("#94a3b8"),
+                )
+            x += fixture_w
+
+        draw_text_center(
+            draw,
+            (x, row_top, x + total_w, row_bottom),
+            format_leaderboard_value(row["total"], metric_key),
+            total_font,
+            hex_to_rgb("#0f7a45"),
+        )
+
+    x = table_left
+    for width in col_widths[:-1]:
+        x += width
+        draw.line((x, TABLE_TOP, x, TABLE_TOP + table_h), fill=hex_to_rgb("#edf1f5"), width=1)
+
+    if not rows:
+        draw_text_center(
+            draw,
+            (table_left, TABLE_TOP + HEADER_H, table_right, TABLE_TOP + 260),
+            "No leaderboard data available yet.",
+            subtitle_font,
+            hex_to_rgb("#64748b"),
+        )
+
+    footer_divider_y = min(TABLE_TOP + table_h + 40, EXPORT_H - 88)
+    footer_text_y = footer_divider_y + 24
+    draw.line((MARGIN_X, footer_divider_y, EXPORT_W - MARGIN_X, footer_divider_y), fill=hex_to_rgb("#d1d5db"), width=2)
+    draw.text((MARGIN_X, footer_text_y), "Graphics by FPL Cartel", font=footer_font, fill=hex_to_rgb("#111827"))
+    source_text = "Source: Pinnacle fallback Bet365 via The Odds API"
+    source_width = draw.textlength(source_text, font=footer_font)
+    draw.text((EXPORT_W - MARGIN_X - source_width, footer_text_y), source_text, font=footer_font, fill=hex_to_rgb("#111827"))
 
     output = BytesIO()
     img.save(output, format="PNG")
@@ -3882,6 +4228,12 @@ def render_metric_cell(value, metric, class_name):
 def render_fixture_card(row, competition_name=None):
     row_competition = competition_name or getattr(row, "fixture_set", "World Cup")
     note = getattr(row, "odds_note", "") or ""
+    league_label = getattr(row, "league_label", "")
+    league_html = (
+        f'<div class="league-label">{escape(str(league_label))}</div>'
+        if league_label
+        else ""
+    )
     note_html = (
         f'<div class="fixture-note">{escape(str(note))}</div>'
         if note
@@ -3889,6 +4241,7 @@ def render_fixture_card(row, competition_name=None):
     )
     return (
         '<div class="fixture-card-wrap">'
+        f"{league_html}"
         '<article class="fixture-card">'
         '<div class="date-block">'
         f"<strong>{escape(row.date)}</strong><span>{escape(row.kickoff)}</span>"
@@ -4020,6 +4373,56 @@ def render_leaderboard_table(
     )
 
 
+def render_efl_leaderboard_table(fixtures, metric_key):
+    rows = build_efl_leaderboard_rows(fixtures, metric_key)
+    if not rows:
+        return '<div class="empty-note">No team ranking data available yet.</div>'
+
+    max_fixture_cols = max(
+        1,
+        max((len(row["fixtures"]) for row in rows), default=1),
+    )
+    max_fixture_cols = min(max_fixture_cols, 3)
+    fixture_headers = "".join(
+        f"<th>Fixture {index}</th>"
+        for index in range(1, max_fixture_cols + 1)
+    )
+    body_rows = []
+    for index, row in enumerate(rows, start=1):
+        fixture_cells = []
+        for fixture_index in range(max_fixture_cols):
+            cell = row["fixtures"][fixture_index] if fixture_index < len(row["fixtures"]) else None
+            fixture_cells.append(render_top_team_value_cell(cell, metric_key))
+
+        body_rows.append(
+            "<tr>"
+            f'<td class="top-rank-cell"><span class="top-rank">{index}</span></td>'
+            '<td class="top-team-cell">'
+            f"{render_team_flag(row['team'], 'EFL Fantasy')}"
+            f'<span>{escape(str(row["team"]))}</span>'
+            "</td>"
+            f'{"".join(fixture_cells)}'
+            '<td class="top-total-cell">'
+            f'<strong>{escape(format_leaderboard_value(row["total"], metric_key))}</strong>'
+            "</td>"
+            "</tr>"
+        )
+
+    return (
+        '<div class="top-teams-table-wrap">'
+        '<table class="top-teams-table">'
+        "<thead><tr>"
+        "<th>Rank</th>"
+        "<th>Team</th>"
+        f"{fixture_headers}"
+        "<th>Total</th>"
+        "</tr></thead>"
+        f'<tbody>{"".join(body_rows)}</tbody>'
+        "</table>"
+        "</div>"
+    )
+
+
 def render_top_teams_section(fixtures, competition_name="World Cup", leaderboard_label=None):
     section_title = (
         "Top Teams by Round"
@@ -4103,7 +4506,12 @@ def render_top_teams_section(fixtures, competition_name="World Cup", leaderboard
         )
 
 
-def render_export_area(fixtures, group_heading=None, competition_name="World Cup"):
+def render_export_area(
+    fixtures,
+    group_heading=None,
+    competition_name="World Cup",
+    source_text="Pinnacle odds via",
+):
     fixture_html = (
         render_fixture_group(fixtures, group_heading, competition_name)
         if group_heading
@@ -4114,7 +4522,7 @@ def render_export_area(fixtures, group_heading=None, competition_name="World Cup
         f"{fixture_html}"
         '<div class="export-footer">'
         "<div>Graphics by <strong>FPL Cartel</strong></div>"
-        "<div>Source: Pinnacle odds via <strong>The Odds API</strong></div>"
+        f"<div>Source: {escape(source_text)} <strong>The Odds API</strong></div>"
         "</div>"
         "</section>"
     )
@@ -4338,13 +4746,146 @@ def render_competition_dashboard(selected_competition):
         st.json(raw_api_response)
 
 
+def render_efl_top_teams_section(fixtures, selected_range):
+    st.markdown(
+        """
+        <section class="top-teams-section">
+          <div class="section-kicker">FPL Cartel model</div>
+          <h2>Top Teams by EFL GW</h2>
+          <p>Opponent and model-estimated value for each team's selected EFL Fantasy range.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    goals_tab, cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
+    with goals_tab:
+        st.markdown(
+            render_efl_leaderboard_table(fixtures, "projected_goals"),
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            "Download leaderboard image",
+            data=build_efl_leaderboard_image(
+                fixtures,
+                "projected_goals",
+                selected_range,
+            ),
+            file_name=(
+                "fpl-cartel-efl-leaderboard-projected-goals-"
+                f"{selected_range.lower().replace(' ', '-')}.png"
+            ),
+            mime="image/png",
+            key="EFL Fantasy_download_projected_goals_leaderboard",
+        )
+    with cs_tab:
+        st.markdown(
+            render_efl_leaderboard_table(fixtures, "clean_sheet_pct"),
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            "Download leaderboard image",
+            data=build_efl_leaderboard_image(
+                fixtures,
+                "clean_sheet_pct",
+                selected_range,
+            ),
+            file_name=(
+                "fpl-cartel-efl-leaderboard-clean-sheet-"
+                f"{selected_range.lower().replace(' ', '-')}.png"
+            ),
+            mime="image/png",
+            key="EFL Fantasy_download_clean_sheet_leaderboard",
+        )
+
+
+def render_efl_dashboard():
+    desktop_styles()
+    source_note = "Live odds via The Odds API &middot; Pinnacle fallback Bet365"
+    st.markdown(render_brand_header("EFL Fantasy"), unsafe_allow_html=True)
+    st.markdown(
+        f'<div class="source-note">{source_note}</div>',
+        unsafe_allow_html=True,
+    )
+
+    frames = []
+    errors = []
+    raw_payloads = {}
+    last_updates = []
+    for league_name, sport_key in EFL_COMPETITIONS.items():
+        payload, error, _status_code, last_updated = fetch_odds(sport_key)
+        raw_payloads[league_name] = payload
+        if error:
+            errors.append(f"{league_name}: {error}")
+            continue
+        if last_updated:
+            last_updates.append(last_updated)
+        league_fixtures = parse_efl_odds_response(payload, league_name)
+        if not league_fixtures.empty:
+            frames.append(league_fixtures)
+
+    if last_updates:
+        st.markdown(
+            f'<div class="source-note">{escape(format_last_updated(max(last_updates)))}</div>',
+            unsafe_allow_html=True,
+        )
+
+    if errors:
+        with st.expander("EFL API notices", expanded=False):
+            for error in errors:
+                st.warning(error)
+
+    if not frames:
+        st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
+        return
+
+    fixtures = pd.concat(frames, ignore_index=True).sort_values("commence_time_dt")
+    selected_range = st.selectbox(
+        "EFL Fantasy range",
+        EFL_RANGE_OPTIONS,
+        key="EFL Fantasy_range",
+    )
+    filtered = filter_by_efl_range(fixtures, selected_range)
+
+    if filtered.empty:
+        st.markdown(
+            '<div class="empty-note">No EFL fixtures available for this selection.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            render_export_area(
+                filtered,
+                selected_range,
+                "EFL Fantasy",
+                "Pinnacle fallback Bet365 via",
+            ),
+            unsafe_allow_html=True,
+        )
+
+    render_efl_top_teams_section(filtered, selected_range)
+
+    with st.expander("Fixture model debug", expanded=False):
+        st.dataframe(
+            build_fixture_debug_table(filtered),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with st.expander("Debug API response", expanded=False):
+        st.json(raw_payloads)
+
+
 def render_desktop_dashboard():
     desktop_styles()
-    world_cup_tab, premier_league_tab = st.tabs(["World Cup", "Premier League"])
+    world_cup_tab, premier_league_tab, efl_tab = st.tabs(
+        ["World Cup", "Premier League", "EFL Fantasy"]
+    )
     with world_cup_tab:
         render_competition_dashboard("World Cup")
     with premier_league_tab:
         render_competition_dashboard("Premier League")
+    with efl_tab:
+        render_efl_dashboard()
 
 
 is_mobile = view == "mobile"
