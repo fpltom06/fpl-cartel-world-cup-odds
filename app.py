@@ -65,6 +65,11 @@ EFL_COMPETITIONS = {
     "League One": "soccer_england_league1",
     "League Two": "soccer_england_league2",
 }
+EFL_BOOKMAKER_PRIORITY = {
+    "Championship": ["pinnacle", "bet365"],
+    "League One": ["bet365", "pinnacle"],
+    "League Two": ["bet365", "pinnacle"],
+}
 EFL_RANGE_OPTIONS = [
     "All available fixtures",
     "Current EFL GW",
@@ -546,6 +551,13 @@ def is_bet365_bookmaker(bookmaker):
     return key == "bet365" or title == "bet365"
 
 
+def bookmaker_matches_key(bookmaker, bookmaker_key):
+    key = str(bookmaker.get("key", "")).lower()
+    title = str(bookmaker.get("title", "")).lower()
+    target = str(bookmaker_key).lower()
+    return key == target or title == target
+
+
 def find_pinnacle_bookmaker(event):
     for bookmaker in event.get("bookmakers", []):
         if is_pinnacle_bookmaker(bookmaker):
@@ -553,16 +565,49 @@ def find_pinnacle_bookmaker(event):
     return None
 
 
-def find_efl_bookmaker(event, home_team):
-    for matcher in (is_pinnacle_bookmaker, is_bet365_bookmaker):
+def find_efl_bookmaker(event, home_team, league_name):
+    priority = EFL_BOOKMAKER_PRIORITY.get(
+        league_name,
+        ["pinnacle", "bet365"],
+    )
+    debug_books = []
+    for bookmaker_key in priority:
         for bookmaker in event.get("bookmakers", []):
-            if not matcher(bookmaker):
+            if not bookmaker_matches_key(bookmaker, bookmaker_key):
                 continue
             total_line = extract_total(bookmaker)
             home_spread = extract_spread(bookmaker, home_team)
+            debug_books.append(
+                {
+                    "bookmaker": bookmaker,
+                    "total_line": total_line,
+                    "home_spread": home_spread,
+                    "has_totals": total_line is not None,
+                    "has_spreads": home_spread is not None,
+                }
+            )
             if total_line is not None and home_spread is not None:
-                return bookmaker, total_line, home_spread
-    return None, None, None
+                return (
+                    bookmaker,
+                    total_line,
+                    home_spread,
+                    total_line is not None,
+                    home_spread is not None,
+                    "OK",
+                )
+
+    if debug_books:
+        best = debug_books[0]
+        return (
+            best["bookmaker"],
+            best["total_line"],
+            best["home_spread"],
+            best["has_totals"],
+            best["has_spreads"],
+            "Odds unavailable",
+        )
+
+    return None, None, None, False, False, "Odds unavailable"
 
 
 def extract_h2h_probabilities(bookmaker, home_team, away_team):
@@ -647,12 +692,15 @@ def project_goals_from_event(event):
     return home_goals, away_goals, debug
 
 
-def project_efl_goals_from_event(event):
+def project_efl_goals_from_event(event, league_name):
     home_team = event.get("home_team")
     debug = {
         "bookmaker_used": "Unavailable",
         "total_line": None,
         "spread_line": None,
+        "has_totals": False,
+        "has_spreads": False,
+        "status": "Odds unavailable",
         "h2h_used": False,
         "btts_used": False,
         "correct_score_used": False,
@@ -660,13 +708,26 @@ def project_efl_goals_from_event(event):
     if not home_team:
         return None, None, debug
 
-    bookmaker, total_line, home_spread = find_efl_bookmaker(event, home_team)
+    (
+        bookmaker,
+        total_line,
+        home_spread,
+        has_totals,
+        has_spreads,
+        status,
+    ) = find_efl_bookmaker(event, home_team, league_name)
+    debug["has_totals"] = has_totals
+    debug["has_spreads"] = has_spreads
+    debug["status"] = status
     if bookmaker is None:
         return None, None, debug
 
     debug["bookmaker_used"] = bookmaker.get("title") or bookmaker.get("key") or "Bookmaker"
     debug["total_line"] = total_line
     debug["spread_line"] = home_spread
+    if status != "OK":
+        return None, None, debug
+
     home_goals, away_goals = calculate_team_goal_projections(total_line, home_spread)
     return home_goals, away_goals, debug
 
@@ -2817,11 +2878,11 @@ def parse_efl_odds_response(payload, league_name):
         commence_time_dt = parse_commence_datetime(commence_time)
         home_team = event.get("home_team", "Home team")
         away_team = event.get("away_team", "Away team")
-        home_xg, away_xg, debug = project_efl_goals_from_event(event)
+        home_xg, away_xg, debug = project_efl_goals_from_event(event, league_name)
         total_line = debug["total_line"]
         home_spread = debug["spread_line"]
         odds_note = (
-            "Pinnacle/Bet365 odds unavailable"
+            "Odds unavailable"
             if total_line is None or home_spread is None
             else ""
         )
@@ -2836,6 +2897,7 @@ def parse_efl_odds_response(payload, league_name):
                 "commence_time": commence_time,
                 "commence_time_dt": commence_time_dt,
                 "fixture_set": "EFL Fantasy",
+                "league": league_name,
                 "league_label": league_name,
                 "home_team": home_team,
                 "away_team": away_team,
@@ -2848,6 +2910,9 @@ def parse_efl_odds_response(payload, league_name):
                 "total_line": total_line,
                 "home_spread": home_spread,
                 "bookmaker_used": debug["bookmaker_used"],
+                "has_totals": debug["has_totals"],
+                "has_spreads": debug["has_spreads"],
+                "status": debug["status"],
                 "h2h_used": debug["h2h_used"],
                 "btts_used": debug["btts_used"],
                 "correct_score_used": debug["correct_score_used"],
@@ -4655,10 +4720,13 @@ def build_fixture_debug_table(fixtures):
     for fixture in fixtures.to_dict("records"):
         rows.append(
             {
+                "league": fixture.get("league", fixture.get("league_label", "")),
                 "Date": fixture.get("date", ""),
                 "Kickoff": fixture.get("kickoff", ""),
                 "Odds API home_team": fixture.get("home_team", ""),
                 "Odds API away_team": fixture.get("away_team", ""),
+                "home_team": fixture.get("home_team", ""),
+                "away_team": fixture.get("away_team", ""),
                 "commence_time": fixture.get("commence_time", ""),
                 "Fixture": (
                     f'{fixture.get("home_team", "")} vs '
@@ -4682,6 +4750,10 @@ def build_fixture_debug_table(fixtures):
                     else ""
                 ),
                 "Bookmaker": fixture.get("bookmaker_used", "Sample"),
+                "bookmaker_used": fixture.get("bookmaker_used", "Sample"),
+                "has_totals": bool(fixture.get("has_totals", False)),
+                "has_spreads": bool(fixture.get("has_spreads", False)),
+                "status": fixture.get("status", ""),
                 "Total line": format_price(fixture.get("total_line")),
                 "Spread line": format_price(fixture.get("home_spread")),
                 "H2H used": bool(fixture.get("h2h_used", False)),
