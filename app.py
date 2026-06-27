@@ -2188,7 +2188,9 @@ def get_flag_url(team_name):
 
 
 def get_team_badge_url(team_name, competition_name="World Cup"):
-    if competition_name in ("Premier League", "EFL Fantasy"):
+    if competition_name == "EFL Fantasy":
+        return get_efl_badge_src(team_name)
+    if competition_name == "Premier League":
         return get_premier_league_badge_url(team_name)
     return get_flag_url(team_name)
 
@@ -2409,6 +2411,34 @@ def get_premier_league_badge_url(team_name):
             )
 
     return ""
+
+
+def slugify_team_name(name):
+    return (
+        str(name or "")
+        .lower()
+        .replace("&", "and")
+        .replace("'", "")
+        .replace(".", "")
+        .replace(" ", "-")
+    )
+
+
+def get_efl_badge_path(team_name):
+    slug = slugify_team_name(team_name)
+    path = f"assets/efl_badges/{slug}.png"
+    if os.path.exists(path):
+        return path
+    return None
+
+
+def get_efl_badge_src(team_name):
+    badge_path = get_efl_badge_path(team_name)
+    if not badge_path:
+        return ""
+
+    data = base64.b64encode(Path(badge_path).read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{data}"
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -2801,6 +2831,19 @@ def filter_by_efl_range(fixtures, selected_range):
     return fixtures[(local_times >= start) & (local_times <= end)]
 
 
+def missing_efl_badge_names(fixtures):
+    if fixtures is None or fixtures.empty:
+        return []
+
+    teams = set()
+    for fixture in fixtures.to_dict("records"):
+        for key in ("home_team", "away_team"):
+            team = fixture.get(key)
+            if team and not get_efl_badge_path(team):
+                teams.add(str(team))
+    return sorted(teams)
+
+
 def format_projected_goals(value):
     if value is None or pd.isna(value):
         return "-"
@@ -3041,6 +3084,7 @@ CELL_COLORS = {
 
 _FLAG_CACHE = {}
 _CLUB_BADGE_CACHE = {}
+_EFL_BADGE_CACHE = {}
 
 
 def hex_to_rgb(hex_color):
@@ -3147,9 +3191,33 @@ def load_club_badge_image(team):
         return None
 
 
+def load_efl_badge_image(team):
+    badge_path = get_efl_badge_path(team)
+    if not badge_path:
+        return None
+
+    if badge_path in _EFL_BADGE_CACHE:
+        return _EFL_BADGE_CACHE[badge_path]
+
+    try:
+        badge = Image.open(badge_path).convert("RGBA")
+        badge.thumbnail((34, 34), Image.LANCZOS)
+        canvas = Image.new("RGBA", (34, 34), (0, 0, 0, 0))
+        offset = ((34 - badge.width) // 2, (34 - badge.height) // 2)
+        canvas.paste(badge, offset, badge)
+        _EFL_BADGE_CACHE[badge_path] = canvas
+        return canvas
+    except Exception:
+        return None
+
+
 def draw_team_badge(img, draw, team, x, y, font, competition_name="World Cup"):
     if competition_name in ("Premier League", "EFL Fantasy"):
-        badge = load_club_badge_image(team)
+        badge = (
+            load_efl_badge_image(team)
+            if competition_name == "EFL Fantasy"
+            else load_club_badge_image(team)
+        )
         if badge is not None:
             img.paste(badge, (int(x), int(y)), badge)
             return
@@ -4863,6 +4931,23 @@ def render_efl_dashboard():
         )
 
     render_efl_top_teams_section(filtered, selected_range)
+
+    with st.expander("Missing EFL badges", expanded=False):
+        missing_badges = missing_efl_badge_names(fixtures)
+        if missing_badges:
+            st.write(
+                pd.DataFrame(
+                    {
+                        "Team": missing_badges,
+                        "Expected file": [
+                            f"assets/efl_badges/{slugify_team_name(team)}.png"
+                            for team in missing_badges
+                        ],
+                    }
+                )
+            )
+        else:
+            st.caption("No missing EFL badges for the currently returned fixtures.")
 
     with st.expander("Fixture model debug", expanded=False):
         st.dataframe(
