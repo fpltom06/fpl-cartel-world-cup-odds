@@ -65,11 +65,6 @@ EFL_COMPETITIONS = {
     "League One": "soccer_england_league1",
     "League Two": "soccer_england_league2",
 }
-EFL_BOOKMAKER_PRIORITY = {
-    "Championship": ["pinnacle", "bet365"],
-    "League One": ["bet365", "pinnacle"],
-    "League Two": ["bet365", "pinnacle"],
-}
 EFL_RANGE_OPTIONS = [
     "All available fixtures",
     "Current EFL GW",
@@ -551,13 +546,6 @@ def is_bet365_bookmaker(bookmaker):
     return key == "bet365" or title == "bet365"
 
 
-def bookmaker_matches_key(bookmaker, bookmaker_key):
-    key = str(bookmaker.get("key", "")).lower()
-    title = str(bookmaker.get("title", "")).lower()
-    target = str(bookmaker_key).lower()
-    return key == target or title == target
-
-
 def find_pinnacle_bookmaker(event):
     for bookmaker in event.get("bookmakers", []):
         if is_pinnacle_bookmaker(bookmaker):
@@ -565,49 +553,70 @@ def find_pinnacle_bookmaker(event):
     return None
 
 
-def find_efl_bookmaker(event, home_team, league_name):
-    priority = EFL_BOOKMAKER_PRIORITY.get(
-        league_name,
-        ["pinnacle", "bet365"],
-    )
-    debug_books = []
-    for bookmaker_key in priority:
-        for bookmaker in event.get("bookmakers", []):
-            if not bookmaker_matches_key(bookmaker, bookmaker_key):
+def efl_bookmaker_tier(bookmaker):
+    if is_pinnacle_bookmaker(bookmaker):
+        return "Pinnacle"
+    if is_bet365_bookmaker(bookmaker):
+        return "Bet365"
+    return "Other"
+
+
+def efl_bookmaker_lines(bookmaker, home_team):
+    total_line = extract_total(bookmaker)
+    home_spread = extract_spread(bookmaker, home_team)
+    return total_line, home_spread
+
+
+def find_efl_bookmaker(event, home_team):
+    bookmakers = event.get("bookmakers", [])
+    has_any_totals = False
+    has_any_spreads = False
+
+    for bookmaker in bookmakers:
+        total_line, home_spread = efl_bookmaker_lines(bookmaker, home_team)
+        has_any_totals = has_any_totals or total_line is not None
+        has_any_spreads = has_any_spreads or home_spread is not None
+
+    for matcher in (is_pinnacle_bookmaker, is_bet365_bookmaker):
+        for bookmaker in bookmakers:
+            if not matcher(bookmaker):
                 continue
-            total_line = extract_total(bookmaker)
-            home_spread = extract_spread(bookmaker, home_team)
-            debug_books.append(
-                {
-                    "bookmaker": bookmaker,
-                    "total_line": total_line,
-                    "home_spread": home_spread,
-                    "has_totals": total_line is not None,
-                    "has_spreads": home_spread is not None,
-                }
-            )
+            total_line, home_spread = efl_bookmaker_lines(bookmaker, home_team)
             if total_line is not None and home_spread is not None:
                 return (
                     bookmaker,
                     total_line,
                     home_spread,
-                    total_line is not None,
-                    home_spread is not None,
+                    True,
+                    True,
                     "OK",
+                    efl_bookmaker_tier(bookmaker),
                 )
 
-    if debug_books:
-        best = debug_books[0]
-        return (
-            best["bookmaker"],
-            best["total_line"],
-            best["home_spread"],
-            best["has_totals"],
-            best["has_spreads"],
-            "Odds unavailable",
-        )
+    for bookmaker in bookmakers:
+        if is_pinnacle_bookmaker(bookmaker) or is_bet365_bookmaker(bookmaker):
+            continue
+        total_line, home_spread = efl_bookmaker_lines(bookmaker, home_team)
+        if total_line is not None and home_spread is not None:
+            return (
+                bookmaker,
+                total_line,
+                home_spread,
+                True,
+                True,
+                "OK",
+                "Other",
+            )
 
-    return None, None, None, False, False, "Odds unavailable"
+    return (
+        None,
+        None,
+        None,
+        has_any_totals,
+        has_any_spreads,
+        "Odds unavailable",
+        "Unavailable",
+    )
 
 
 def extract_h2h_probabilities(bookmaker, home_team, away_team):
@@ -700,6 +709,7 @@ def project_efl_goals_from_event(event, league_name):
         "spread_line": None,
         "has_totals": False,
         "has_spreads": False,
+        "bookmaker_tier": "Unavailable",
         "status": "Odds unavailable",
         "h2h_used": False,
         "btts_used": False,
@@ -715,9 +725,11 @@ def project_efl_goals_from_event(event, league_name):
         has_totals,
         has_spreads,
         status,
-    ) = find_efl_bookmaker(event, home_team, league_name)
+        bookmaker_tier,
+    ) = find_efl_bookmaker(event, home_team)
     debug["has_totals"] = has_totals
     debug["has_spreads"] = has_spreads
+    debug["bookmaker_tier"] = bookmaker_tier
     debug["status"] = status
     if bookmaker is None:
         return None, None, debug
@@ -2910,6 +2922,7 @@ def parse_efl_odds_response(payload, league_name):
                 "total_line": total_line,
                 "home_spread": home_spread,
                 "bookmaker_used": debug["bookmaker_used"],
+                "bookmaker_tier": debug["bookmaker_tier"],
                 "has_totals": debug["has_totals"],
                 "has_spreads": debug["has_spreads"],
                 "status": debug["status"],
@@ -3844,7 +3857,7 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
     footer_text_y = footer_divider_y + 24
     draw.line((MARGIN_X, footer_divider_y, EXPORT_W - MARGIN_X, footer_divider_y), fill=hex_to_rgb("#d1d5db"), width=2)
     draw.text((MARGIN_X, footer_text_y), "Graphics by FPL Cartel", font=footer_font, fill=hex_to_rgb("#111827"))
-    source_text = "Source: Pinnacle fallback Bet365 via The Odds API"
+    source_text = "Source: Pinnacle, Bet365, then best available via The Odds API"
     source_width = draw.textlength(source_text, font=footer_font)
     draw.text((EXPORT_W - MARGIN_X - source_width, footer_text_y), source_text, font=footer_font, fill=hex_to_rgb("#111827"))
 
@@ -4790,6 +4803,7 @@ def build_fixture_debug_table(fixtures):
                 ),
                 "Bookmaker": fixture.get("bookmaker_used", "Sample"),
                 "bookmaker_used": fixture.get("bookmaker_used", "Sample"),
+                "bookmaker_tier": fixture.get("bookmaker_tier", ""),
                 "has_totals": bool(fixture.get("has_totals", False)),
                 "has_spreads": bool(fixture.get("has_spreads", False)),
                 "status": fixture.get("status", ""),
@@ -5028,9 +5042,27 @@ def render_efl_top_teams_section(fixtures, selected_range):
         )
 
 
+def efl_bookmaker_quality_counts(fixtures):
+    counts = {
+        "Fixtures using Pinnacle": 0,
+        "Fixtures using Bet365": 0,
+        "Fixtures using Other": 0,
+        "Fixtures unavailable": 0,
+    }
+    if fixtures is None or fixtures.empty or "bookmaker_tier" not in fixtures.columns:
+        return counts
+
+    tiers = fixtures["bookmaker_tier"].fillna("Unavailable").astype(str)
+    counts["Fixtures using Pinnacle"] = int((tiers == "Pinnacle").sum())
+    counts["Fixtures using Bet365"] = int((tiers == "Bet365").sum())
+    counts["Fixtures using Other"] = int((tiers == "Other").sum())
+    counts["Fixtures unavailable"] = int((tiers == "Unavailable").sum())
+    return counts
+
+
 def render_efl_dashboard():
     desktop_styles()
-    source_note = "Live odds via The Odds API &middot; Pinnacle fallback Bet365"
+    source_note = "Live odds via The Odds API &middot; Pinnacle, Bet365, then best available"
     st.markdown(render_brand_header("EFL Fantasy"), unsafe_allow_html=True)
     st.markdown(
         f'<div class="source-note">{source_note}</div>',
@@ -5073,6 +5105,7 @@ def render_efl_dashboard():
         }
         coverage_counts["Total merged events"] = 0
         coverage_counts["Total after EFL GW filter"] = 0
+        coverage_counts.update(efl_bookmaker_quality_counts(pd.DataFrame()))
         with st.expander("EFL fixture coverage debug", expanded=True):
             st.dataframe(
                 pd.DataFrame([coverage_counts]),
@@ -5100,6 +5133,7 @@ def render_efl_dashboard():
     }
     coverage_counts["Total merged events"] = len(fixtures)
     coverage_counts["Total after EFL GW filter"] = len(filtered)
+    coverage_counts.update(efl_bookmaker_quality_counts(filtered))
 
     with st.expander("EFL fixture coverage debug", expanded=False):
         st.dataframe(
@@ -5119,7 +5153,7 @@ def render_efl_dashboard():
                 filtered,
                 selected_range,
                 "EFL Fantasy",
-                "Pinnacle fallback Bet365 via",
+                "Pinnacle, Bet365, then best available via",
             ),
             unsafe_allow_html=True,
         )
