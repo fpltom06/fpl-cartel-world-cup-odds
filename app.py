@@ -2935,16 +2935,52 @@ def efl_gw_window(offset_weeks=0):
     return start, end
 
 
+def as_uk_datetime(dt):
+    if pd.isna(dt) or getattr(dt, "year", 0) >= 9999:
+        return None
+    if dt.tzinfo:
+        return dt.astimezone(UK_TZ)
+    return dt.replace(tzinfo=timezone.utc).astimezone(UK_TZ)
+
+
+def is_in_efl_gw_window(dt, offset_weeks=0):
+    start, end = efl_gw_window(offset_weeks)
+    local_dt = as_uk_datetime(dt)
+    return local_dt is not None and start <= local_dt <= end
+
+
+def add_efl_range_flags(fixtures):
+    if fixtures.empty:
+        return fixtures
+
+    fixtures = fixtures.copy()
+    fixtures["included_in_current_efl_gw"] = fixtures["commence_time_dt"].apply(
+        lambda dt: is_in_efl_gw_window(dt, 0)
+    )
+    fixtures["included_in_next_efl_gw"] = fixtures["commence_time_dt"].apply(
+        lambda dt: is_in_efl_gw_window(dt, 1)
+    )
+    return fixtures
+
+
 def filter_by_efl_range(fixtures, selected_range):
     if fixtures.empty or selected_range == "All available fixtures":
         return fixtures
 
-    offset = 0 if selected_range == "Current EFL GW" else 1
-    start, end = efl_gw_window(offset)
-    local_times = fixtures["commence_time_dt"].apply(
-        lambda dt: dt.astimezone(UK_TZ) if dt.tzinfo else dt.replace(tzinfo=timezone.utc).astimezone(UK_TZ)
-    )
-    return fixtures[(local_times >= start) & (local_times <= end)]
+    if selected_range == "Current EFL GW":
+        if "included_in_current_efl_gw" in fixtures.columns:
+            return fixtures[fixtures["included_in_current_efl_gw"]]
+        offset = 0
+    else:
+        if "included_in_next_efl_gw" in fixtures.columns:
+            return fixtures[fixtures["included_in_next_efl_gw"]]
+        offset = 1
+
+    return fixtures[
+        fixtures["commence_time_dt"].apply(
+            lambda dt: is_in_efl_gw_window(dt, offset)
+        )
+    ]
 
 
 def missing_efl_badge_names(fixtures):
@@ -4728,6 +4764,9 @@ def build_fixture_debug_table(fixtures):
                 "home_team": fixture.get("home_team", ""),
                 "away_team": fixture.get("away_team", ""),
                 "commence_time": fixture.get("commence_time", ""),
+                "included_in_current_efl_gw": bool(
+                    fixture.get("included_in_current_efl_gw", False)
+                ),
                 "Fixture": (
                     f'{fixture.get("home_team", "")} vs '
                     f'{fixture.get("away_team", "")}'
@@ -5002,9 +5041,11 @@ def render_efl_dashboard():
     errors = []
     raw_payloads = {}
     last_updates = []
+    league_event_counts = {}
     for league_name, sport_key in EFL_COMPETITIONS.items():
         payload, error, _status_code, last_updated = fetch_odds(sport_key)
         raw_payloads[league_name] = payload
+        league_event_counts[league_name] = len(payload or [])
         if error:
             errors.append(f"{league_name}: {error}")
             continue
@@ -5026,16 +5067,46 @@ def render_efl_dashboard():
                 st.warning(error)
 
     if not frames:
+        coverage_counts = {
+            f"{league_name} events returned": league_event_counts.get(league_name, 0)
+            for league_name in EFL_COMPETITIONS
+        }
+        coverage_counts["Total merged events"] = 0
+        coverage_counts["Total after EFL GW filter"] = 0
+        with st.expander("EFL fixture coverage debug", expanded=True):
+            st.dataframe(
+                pd.DataFrame([coverage_counts]),
+                use_container_width=True,
+                hide_index=True,
+            )
         st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
         return
 
-    fixtures = pd.concat(frames, ignore_index=True).sort_values("commence_time_dt")
+    fixtures = (
+        pd.concat(frames, ignore_index=True)
+        .sort_values("commence_time_dt")
+        .reset_index(drop=True)
+    )
+    fixtures = add_efl_range_flags(fixtures)
     selected_range = st.selectbox(
         "EFL Fantasy range",
         EFL_RANGE_OPTIONS,
         key="EFL Fantasy_range",
     )
     filtered = filter_by_efl_range(fixtures, selected_range)
+    coverage_counts = {
+        f"{league_name} events returned": league_event_counts.get(league_name, 0)
+        for league_name in EFL_COMPETITIONS
+    }
+    coverage_counts["Total merged events"] = len(fixtures)
+    coverage_counts["Total after EFL GW filter"] = len(filtered)
+
+    with st.expander("EFL fixture coverage debug", expanded=False):
+        st.dataframe(
+            pd.DataFrame([coverage_counts]),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     if filtered.empty:
         st.markdown(
@@ -5074,7 +5145,7 @@ def render_efl_dashboard():
 
     with st.expander("Fixture model debug", expanded=False):
         st.dataframe(
-            build_fixture_debug_table(filtered),
+            build_fixture_debug_table(fixtures),
             use_container_width=True,
             hide_index=True,
         )
