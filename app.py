@@ -902,6 +902,41 @@ def fetch_odds(sport_key):
         return [], "The Odds API returned a response that was not valid JSON.", None, None
 
 
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_events(sport_key):
+    api_key = ODDS_API_KEY
+    if not api_key or api_key == "your_api_key_here":
+        return [], "Missing Odds API key.", None, None
+
+    params = {
+        "apiKey": api_key,
+        "dateFormat": "iso",
+    }
+
+    try:
+        response = requests.get(
+            f"{ODDS_API_BASE_URL}/{sport_key}/events",
+            params=params,
+            timeout=12,
+        )
+        status_code = response.status_code
+        if status_code != 200:
+            response_message = response.text.strip()
+            detail = f" Response: {response_message[:500]}" if response_message else ""
+            return (
+                [],
+                f"The Odds API returned status code {status_code}.{detail}",
+                status_code,
+                None,
+            )
+        return response.json(), None, status_code, datetime.now(timezone.utc)
+    except requests.RequestException as exc:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+        return [], str(exc), status_code, None
+    except ValueError:
+        return [], "The Odds API returned a response that was not valid JSON.", None, None
+
+
 def fetch_world_cup_odds_mobile():
     payload, error, _status, updated = fetch_odds(COMPETITIONS["World Cup"]["sport_key"])
     return payload, updated, error
@@ -2889,15 +2924,44 @@ def parse_odds_response(payload, competition_name="World Cup"):
     return pd.DataFrame(rows).sort_values("commence_time_dt")
 
 
-def parse_efl_odds_response(payload, league_name):
+def efl_event_match_key(event):
+    commence_time = event.get("commence_time", "")
+    home_team = str(event.get("home_team", "")).strip().lower()
+    away_team = str(event.get("away_team", "")).strip().lower()
+    kickoff_date = str(commence_time)[:10]
+    return home_team, away_team, kickoff_date
+
+
+def build_efl_odds_lookup(odds_payload):
+    by_id = {}
+    by_match = {}
+    for event in odds_payload or []:
+        event_id = event.get("id")
+        if event_id:
+            by_id[event_id] = event
+        by_match[efl_event_match_key(event)] = event
+    return by_id, by_match
+
+
+def get_efl_pricing_event(fixture_event, odds_by_id, odds_by_match):
+    event_id = fixture_event.get("id")
+    if event_id and event_id in odds_by_id:
+        return odds_by_id[event_id]
+    return odds_by_match.get(efl_event_match_key(fixture_event), fixture_event)
+
+
+def parse_efl_odds_response(events_payload, league_name, odds_payload=None):
     rows = []
-    for event in payload or []:
+    odds_by_id, odds_by_match = build_efl_odds_lookup(odds_payload)
+    fixture_payload = events_payload or odds_payload or []
+    for event in fixture_payload:
         commence_time = event.get("commence_time")
         date_label, kickoff, _unused_label = parse_commence_time(commence_time)
         commence_time_dt = parse_commence_datetime(commence_time)
         home_team = event.get("home_team", "Home team")
         away_team = event.get("away_team", "Away team")
-        home_xg, away_xg, debug = project_efl_goals_from_event(event, league_name)
+        pricing_event = get_efl_pricing_event(event, odds_by_id, odds_by_match)
+        home_xg, away_xg, debug = project_efl_goals_from_event(pricing_event, league_name)
         total_line = debug["total_line"]
         home_spread = debug["spread_line"]
         odds_note = (
@@ -5138,24 +5202,39 @@ def render_efl_dashboard():
     league_event_counts = {}
     api_debug_rows = []
     for league_name, sport_key in EFL_COMPETITIONS.items():
-        payload, error, _status_code, last_updated = fetch_odds(sport_key)
-        raw_payloads[league_name] = payload
-        league_event_counts[league_name] = len(payload or [])
+        events_payload, events_error, events_status_code, events_last_updated = fetch_events(sport_key)
+        odds_payload, odds_error, odds_status_code, odds_last_updated = fetch_odds(sport_key)
+        raw_payloads[league_name] = {
+            "events": events_payload,
+            "odds": odds_payload,
+        }
+        league_event_counts[league_name] = len(events_payload or [])
         api_debug_rows.append(
             {
                 "league": league_name,
                 "sport_key": sport_key,
-                "status_code": _status_code or "",
-                "events_returned": len(payload or []),
-                "response_message": error or "OK",
+                "events_status_code": events_status_code or "",
+                "events_returned": len(events_payload or []),
+                "events_response_message": events_error or "OK",
+                "odds_status_code": odds_status_code or "",
+                "odds_events_returned": len(odds_payload or []),
+                "odds_response_message": odds_error or "OK",
             }
         )
-        if error:
-            errors.append(f"{league_name}: {error}")
-            continue
-        if last_updated:
-            last_updates.append(last_updated)
-        league_fixtures = parse_efl_odds_response(payload, league_name)
+        if events_error:
+            errors.append(f"{league_name} events: {events_error}")
+        if odds_error:
+            errors.append(f"{league_name} odds: {odds_error}")
+        if events_last_updated:
+            last_updates.append(events_last_updated)
+        if odds_last_updated:
+            last_updates.append(odds_last_updated)
+
+        league_fixtures = parse_efl_odds_response(
+            events_payload,
+            league_name,
+            odds_payload,
+        )
         if not league_fixtures.empty:
             frames.append(league_fixtures)
 
