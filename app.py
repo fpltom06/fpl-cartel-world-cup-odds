@@ -70,8 +70,6 @@ EFL_RANGE_OPTIONS = [
     "Current EFL GW",
     "Next EFL GW",
 ]
-EFL_EXPECTED_OPENING_GW_FIXTURES = 36
-EFL_FIXTURE_SUPPLEMENT_PATH = Path("data/efl_fixtures.csv")
 UK_TZ = ZoneInfo("Europe/London")
 NO_LIVE_ODDS_MESSAGE = (
     "No live betting odds available yet. This usually happens when fixtures "
@@ -2945,56 +2943,6 @@ def build_efl_odds_lookup(odds_payload):
     return by_id, by_match
 
 
-@st.cache_data(ttl=300, show_spinner=False)
-def load_efl_fixture_supplement():
-    if not EFL_FIXTURE_SUPPLEMENT_PATH.exists():
-        return []
-
-    try:
-        supplement = pd.read_csv(EFL_FIXTURE_SUPPLEMENT_PATH)
-    except Exception:
-        return []
-
-    required_columns = {"league", "commence_time", "home_team", "away_team"}
-    if not required_columns.issubset(set(supplement.columns)):
-        return []
-
-    events = []
-    for row in supplement.to_dict("records"):
-        league = str(row.get("league", "")).strip()
-        if league not in EFL_COMPETITIONS:
-            continue
-        commence_time = str(row.get("commence_time", "")).strip()
-        home_team = str(row.get("home_team", "")).strip()
-        away_team = str(row.get("away_team", "")).strip()
-        if not commence_time or not home_team or not away_team:
-            continue
-        events.append(
-            {
-                "id": row.get("id")
-                or make_fixture_id(commence_time, home_team, away_team),
-                "league": league,
-                "commence_time": commence_time,
-                "home_team": home_team,
-                "away_team": away_team,
-            }
-        )
-    return events
-
-
-def merge_efl_fixture_events(events_payload, supplement_events, league_name):
-    merged = {}
-    for event in events_payload or []:
-        merged[efl_event_match_key(event)] = event
-
-    for event in supplement_events or []:
-        if event.get("league") != league_name:
-            continue
-        merged.setdefault(efl_event_match_key(event), event)
-
-    return list(merged.values())
-
-
 def get_efl_pricing_event(fixture_event, odds_by_id, odds_by_match):
     event_id = fixture_event.get("id")
     if event_id and event_id in odds_by_id:
@@ -5183,82 +5131,6 @@ def efl_bookmaker_quality_counts(fixtures):
     return counts
 
 
-def efl_projection_counts(fixtures):
-    counts = {
-        "Fixtures with projected goals": 0,
-        "Fixtures unavailable": 0,
-    }
-    if fixtures is None or fixtures.empty:
-        return counts
-
-    has_projection = fixtures["home_xg"].notna() & fixtures["away_xg"].notna()
-    counts["Fixtures with projected goals"] = int(has_projection.sum())
-    counts["Fixtures unavailable"] = int((~has_projection).sum())
-    return counts
-
-
-def build_efl_debug_counts(
-    fixtures,
-    current_efl_fixtures,
-    league_event_counts,
-    supplement_count=0,
-):
-    all_count = 0 if fixtures is None else len(fixtures)
-    current_count = 0 if current_efl_fixtures is None else len(current_efl_fixtures)
-    counts = {
-        "Championship returned": league_event_counts.get("Championship", 0),
-        "League One returned": league_event_counts.get("League One", 0),
-        "League Two returned": league_event_counts.get("League Two", 0),
-        "Supplement fixtures loaded": supplement_count,
-        "Total raw EFL fixtures": all_count,
-        "Current EFL GW fixtures": current_count,
-        "All available fixtures": all_count,
-    }
-    counts.update(efl_projection_counts(fixtures))
-    counts.update(efl_bookmaker_quality_counts(fixtures))
-    return counts
-
-
-def render_efl_debug_panel(
-    fixtures,
-    current_efl_fixtures,
-    league_event_counts,
-    api_debug_rows,
-    supplement_count=0,
-):
-    st.markdown("#### EFL fixture debug")
-    st.caption(
-        "Raw API counts, merged fixture coverage, EFL GW filtering, and odds parsing status."
-    )
-    total_api_events = sum(league_event_counts.values())
-    if total_api_events < EFL_EXPECTED_OPENING_GW_FIXTURES and supplement_count == 0:
-        st.warning(
-            "The Odds API currently returns only "
-            f"{total_api_events} EFL fixture events. To display the full "
-            f"{EFL_EXPECTED_OPENING_GW_FIXTURES}-fixture opening EFL GW, add the "
-            f"missing fixtures to {EFL_FIXTURE_SUPPLEMENT_PATH.as_posix()}."
-        )
-    st.dataframe(
-        pd.DataFrame(
-            [
-                build_efl_debug_counts(
-                    fixtures,
-                    current_efl_fixtures,
-                    league_event_counts,
-                    supplement_count,
-                )
-            ]
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
-    st.dataframe(
-        pd.DataFrame(api_debug_rows),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-
 def render_efl_dashboard():
     desktop_styles()
     source_note = "Live odds via The Odds API &middot; Pinnacle, Bet365, then best available"
@@ -5272,37 +5144,13 @@ def render_efl_dashboard():
     errors = []
     raw_payloads = {}
     last_updates = []
-    league_event_counts = {}
-    api_debug_rows = []
-    supplement_events = load_efl_fixture_supplement()
-    supplement_count = len(supplement_events)
     for league_name, sport_key in EFL_COMPETITIONS.items():
         events_payload, events_error, events_status_code, events_last_updated = fetch_events(sport_key)
         odds_payload, odds_error, odds_status_code, odds_last_updated = fetch_odds(sport_key)
-        merged_events_payload = merge_efl_fixture_events(
-            events_payload,
-            supplement_events,
-            league_name,
-        )
         raw_payloads[league_name] = {
             "events": events_payload,
-            "merged_events": merged_events_payload,
             "odds": odds_payload,
         }
-        league_event_counts[league_name] = len(events_payload or [])
-        api_debug_rows.append(
-            {
-                "league": league_name,
-                "sport_key": sport_key,
-                "events_status_code": events_status_code or "",
-                "events_returned": len(events_payload or []),
-                "merged_events": len(merged_events_payload),
-                "events_response_message": events_error or "OK",
-                "odds_status_code": odds_status_code or "",
-                "odds_events_returned": len(odds_payload or []),
-                "odds_response_message": odds_error or "OK",
-            }
-        )
         if events_error:
             errors.append(f"{league_name} events: {events_error}")
         if odds_error:
@@ -5313,7 +5161,7 @@ def render_efl_dashboard():
             last_updates.append(odds_last_updated)
 
         league_fixtures = parse_efl_odds_response(
-            merged_events_payload,
+            events_payload,
             league_name,
             odds_payload,
         )
@@ -5332,14 +5180,6 @@ def render_efl_dashboard():
                 st.warning(error)
 
     if not frames:
-        empty_fixtures = pd.DataFrame()
-        render_efl_debug_panel(
-            empty_fixtures,
-            empty_fixtures,
-            league_event_counts,
-            api_debug_rows,
-            supplement_count,
-        )
         st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
         return
 
@@ -5355,14 +5195,6 @@ def render_efl_dashboard():
         key="EFL Fantasy_range",
     )
     filtered = filter_by_efl_range(fixtures, selected_range)
-    current_efl_fixtures = filter_by_efl_range(fixtures, "Current EFL GW")
-    render_efl_debug_panel(
-        fixtures,
-        current_efl_fixtures,
-        league_event_counts,
-        api_debug_rows,
-        supplement_count,
-    )
 
     if filtered.empty:
         st.markdown(
