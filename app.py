@@ -500,8 +500,16 @@ def mobile_round_for_fixture(home_team, away_team, dt):
         return "Round 2"
     if dt.month == 6 and 25 <= dt.day <= 27:
         return "Round 3"
-    if dt.month == 6 and dt.day >= 28:
+    if (dt.month == 6 and dt.day >= 28) or (dt.month == 7 and dt.day <= 3):
         return "Round of 32"
+    if dt.month == 7 and 4 <= dt.day <= 7:
+        return "Round of 16"
+    if dt.month == 7 and 9 <= dt.day <= 11:
+        return "Quarter-finals"
+    if dt.month == 7 and 14 <= dt.day <= 15:
+        return "Semi-finals"
+    if dt.month == 7 and dt.day >= 18:
+        return "Final"
     return "Knockouts"
 
 
@@ -2388,8 +2396,16 @@ def get_round_for_fixture(home_team, away_team, dt):
     if dt.month == 6 and 25 <= dt.day <= 27:
         return "Round 3"
 
-    if dt.month == 6 and dt.day >= 28:
+    if (dt.month == 6 and dt.day >= 28) or (dt.month == 7 and dt.day <= 3):
         return "Round of 32"
+    if dt.month == 7 and 4 <= dt.day <= 7:
+        return "Round of 16"
+    if dt.month == 7 and 9 <= dt.day <= 11:
+        return "Quarter-finals"
+    if dt.month == 7 and 14 <= dt.day <= 15:
+        return "Semi-finals"
+    if dt.month == 7 and dt.day >= 18:
+        return "Final"
 
     return "Knockouts"
 
