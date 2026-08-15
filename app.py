@@ -51,10 +51,6 @@ FPL_FIXTURES_URL = "https://fantasy.premierleague.com/api/fixtures/"
 FPL_BOOTSTRAP_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
 MARKETS = "h2h,totals,spreads"
 COMPETITIONS = {
-    "World Cup": {
-        "sport_key": "soccer_fifa_world_cup",
-        "neutral": True,
-    },
     "Premier League": {
         "sport_key": "soccer_epl",
         "neutral": False,
@@ -1514,9 +1510,17 @@ def render_mobile_dashboard():
     mobile_styles()
     selected_competition = st.selectbox(
         "Competition",
-        list(COMPETITIONS.keys()),
+        list(COMPETITIONS.keys()) + ["EFL Fantasy"],
         key="mobile_competition",
     )
+    if selected_competition == "EFL Fantasy":
+        st.markdown(render_brand_header("EFL Fantasy"), unsafe_allow_html=True)
+        st.markdown(
+            '<div class="mobile-top-empty">EFL Fantasy is available on desktop view.</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
     competition_config = COMPETITIONS[selected_competition]
     mobile_neutral_label = "On" if competition_config["neutral"] else "Off"
     st.segmented_control(
@@ -1554,27 +1558,19 @@ def render_mobile_dashboard():
         live_fixtures = add_premier_league_gameweeks(live_fixtures)
     fixtures = live_fixtures
 
-    if selected_competition == "World Cup":
-        round_options = sorted(
-            fixtures["round"].drop_duplicates().tolist(),
-            key=mobile_round_sort_key,
+    gw_options = gameweek_options()
+    default_gw = default_gameweek(fixtures)
+    selected_gameweek = st.selectbox(
+        "Gameweek",
+        gw_options,
+        index=gw_options.index(default_gw) if default_gw in gw_options else 0,
+    )
+    fixtures_to_show = filter_by_gameweek(fixtures, selected_gameweek)
+    if fixtures_to_show.empty and selected_gameweek.startswith("GW"):
+        st.warning(
+            f"No {selected_gameweek} matches could be linked to FPL fixtures. "
+            "Use All priced fixtures to inspect returned odds."
         )
-        selected_round = st.selectbox("Round", round_options)
-        fixtures_to_show = fixtures[fixtures["round"] == selected_round]
-    else:
-        gw_options = gameweek_options()
-        default_gw = default_gameweek(fixtures)
-        selected_gameweek = st.selectbox(
-            "Gameweek",
-            gw_options,
-            index=gw_options.index(default_gw) if default_gw in gw_options else 0,
-        )
-        fixtures_to_show = filter_by_gameweek(fixtures, selected_gameweek)
-        if fixtures_to_show.empty and selected_gameweek.startswith("GW"):
-            st.warning(
-                f"No {selected_gameweek} matches could be linked to FPL fixtures. "
-                "Use All priced fixtures to inspect returned odds."
-            )
     page_size = 8
     max_pages = max(1, math.ceil(len(fixtures_to_show) / page_size))
     page_options = [f"Page {page_number}" for page_number in range(1, max_pages + 1)]
@@ -2549,14 +2545,12 @@ def get_premier_league_badge_url(team_name):
 
 
 def slugify_team_name(name):
-    return (
-        str(name or "")
-        .lower()
-        .replace("&", "and")
-        .replace("'", "")
-        .replace(".", "")
-        .replace(" ", "-")
-    )
+    clean = str(name or "").lower()
+    clean = clean.replace("&", "and")
+    clean = clean.replace("'", "")
+    clean = clean.replace(".", "")
+    clean = re.sub(r"[^a-z0-9]+", "-", clean)
+    return clean.strip("-")
 
 
 EFL_BADGE_ALIASES = {
@@ -2587,8 +2581,21 @@ EFL_BADGE_ALIASES = {
 }
 
 
+def efl_badge_dir_signature():
+    badge_dir = Path("assets/efl_badges")
+    if not badge_dir.exists():
+        return ()
+
+    return tuple(
+        sorted(
+            (badge_path.name, badge_path.stat().st_mtime_ns)
+            for badge_path in badge_dir.glob("*.png")
+        )
+    )
+
+
 @st.cache_data(ttl=300, show_spinner=False)
-def efl_badge_file_index():
+def efl_badge_file_index(_signature=None):
     badge_dir = Path("assets/efl_badges")
     if not badge_dir.exists():
         return {}
@@ -2604,7 +2611,7 @@ def get_efl_badge_path(team_name):
         str(team_name or "").strip(),
         EFL_BADGE_ALIASES.get(str(team_name or "").strip(), ""),
     ]
-    badge_index = efl_badge_file_index()
+    badge_index = efl_badge_file_index(efl_badge_dir_signature())
     for candidate in candidates:
         if not candidate:
             continue
@@ -5264,11 +5271,9 @@ def render_efl_dashboard():
 
 def render_desktop_dashboard():
     desktop_styles()
-    world_cup_tab, premier_league_tab, efl_tab = st.tabs(
-        ["World Cup", "Premier League", "EFL Fantasy"]
+    premier_league_tab, efl_tab = st.tabs(
+        ["Premier League", "EFL Fantasy"]
     )
-    with world_cup_tab:
-        render_competition_dashboard("World Cup")
     with premier_league_tab:
         render_competition_dashboard("Premier League")
     with efl_tab:
@@ -5281,3 +5286,6 @@ if is_mobile:
     render_mobile_dashboard()
 else:
     render_desktop_dashboard()
+
+
+
