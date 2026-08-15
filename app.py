@@ -3943,10 +3943,10 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
 
         cell = row["fixtures"][0] if row["fixtures"] else None
         if cell:
-            opponent_badge_size = 32
+            opponent_badge_size = 42
             opponent_badge = load_efl_badge_image(cell["opponent"], opponent_badge_size)
             opponent_badge_x = x + ((fixture_w - opponent_badge_size) / 2)
-            opponent_badge_y = row_top + 7
+            opponent_badge_y = row_top + 13
             if opponent_badge is not None:
                 img.paste(
                     opponent_badge,
@@ -3975,18 +3975,9 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
                     header_font,
                     hex_to_rgb("#64748b"),
                 )
-            draw_wrapped_text_center(
-                draw,
-                (x + 16, row_top + 39, x + fixture_w - 16, row_top + 67),
-                cell["opponent"],
-                opponent_font,
-                hex_to_rgb("#111827"),
-                max_lines=1,
-                line_height=1.15,
-            )
             draw_text_center(
                 draw,
-                (x, row_top + 66, x + fixture_w, row_bottom - 4),
+                (x, row_top + 56, x + fixture_w, row_bottom - 4),
                 format_leaderboard_value(cell[metric_key], metric_key),
                 value_font,
                 hex_to_rgb("#0f7a45"),
