@@ -3897,7 +3897,7 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
         fill=hex_to_rgb("#f5f7fa"),
     )
 
-    headers = ["Rank", "Team", "Fixture 1"]
+    headers = ["Rank", "Team", "Projected Goals"]
     x = table_left
     for header, width in zip(headers, col_widths):
         draw_text_center(
@@ -3943,18 +3943,50 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
 
         cell = row["fixtures"][0] if row["fixtures"] else None
         if cell:
+            opponent_badge_size = 32
+            opponent_badge = load_efl_badge_image(cell["opponent"], opponent_badge_size)
+            opponent_badge_x = x + ((fixture_w - opponent_badge_size) / 2)
+            opponent_badge_y = row_top + 7
+            if opponent_badge is not None:
+                img.paste(
+                    opponent_badge,
+                    (int(opponent_badge_x), int(opponent_badge_y)),
+                    opponent_badge,
+                )
+            else:
+                draw.ellipse(
+                    (
+                        opponent_badge_x,
+                        opponent_badge_y,
+                        opponent_badge_x + opponent_badge_size,
+                        opponent_badge_y + opponent_badge_size,
+                    ),
+                    fill=hex_to_rgb("#e5e7eb"),
+                )
+                draw_text_center(
+                    draw,
+                    (
+                        opponent_badge_x,
+                        opponent_badge_y,
+                        opponent_badge_x + opponent_badge_size,
+                        opponent_badge_y + opponent_badge_size,
+                    ),
+                    "\u26bd",
+                    header_font,
+                    hex_to_rgb("#64748b"),
+                )
             draw_wrapped_text_center(
                 draw,
-                (x + 16, row_top + 9, x + fixture_w - 16, row_top + 50),
+                (x + 16, row_top + 39, x + fixture_w - 16, row_top + 67),
                 cell["opponent"],
                 opponent_font,
                 hex_to_rgb("#111827"),
-                max_lines=2,
+                max_lines=1,
                 line_height=1.15,
             )
             draw_text_center(
                 draw,
-                (x, row_top + 50, x + fixture_w, row_bottom - 6),
+                (x, row_top + 66, x + fixture_w, row_bottom - 4),
                 format_leaderboard_value(cell[metric_key], metric_key),
                 value_font,
                 hex_to_rgb("#0f7a45"),
