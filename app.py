@@ -3464,24 +3464,25 @@ def get_badge_bytes(url):
         return None
 
 
-def load_club_badge_image(team):
+def load_club_badge_image(team, size=34):
     badge_url = get_premier_league_badge_url(team)
     if not badge_url:
         return None
 
-    if badge_url in _CLUB_BADGE_CACHE:
-        return _CLUB_BADGE_CACHE[badge_url]
+    cache_key = (badge_url, size)
+    if cache_key in _CLUB_BADGE_CACHE:
+        return _CLUB_BADGE_CACHE[cache_key]
 
     try:
         badge_bytes = get_badge_bytes(badge_url)
         if not badge_bytes:
             return None
         badge = Image.open(BytesIO(badge_bytes)).convert("RGBA")
-        badge.thumbnail((34, 34), Image.LANCZOS)
-        canvas = Image.new("RGBA", (34, 34), (0, 0, 0, 0))
-        offset = ((34 - badge.width) // 2, (34 - badge.height) // 2)
+        badge.thumbnail((size, size), Image.LANCZOS)
+        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        offset = ((size - badge.width) // 2, (size - badge.height) // 2)
         canvas.paste(badge, offset, badge)
-        _CLUB_BADGE_CACHE[badge_url] = canvas
+        _CLUB_BADGE_CACHE[cache_key] = canvas
         return canvas
     except Exception:
         return None
@@ -3688,6 +3689,166 @@ def build_leaderboard_image(
     draw.text((MARGIN_X, 120), leaderboard_range, font=subtitle_font, fill=hex_to_rgb("#4b5563"))
 
     rows = build_leaderboard_rows(fixtures, metric_key, selected_rounds)
+    if competition_name == "Premier League":
+        table_w = round(EXPORT_W * 0.58)
+        table_left = round((EXPORT_W - table_w) / 2)
+        table_right = table_left + table_w
+        rank_w = round(table_w * 0.12)
+        team_w = round(table_w * 0.16)
+        metric_w = table_w - rank_w - team_w
+        col_widths = [rank_w, team_w, metric_w]
+        table_h = HEADER_H + min(10, len(rows)) * ROW_H
+
+        draw.rounded_rectangle(
+            (table_left, TABLE_TOP, table_right, TABLE_TOP + table_h),
+            radius=18,
+            fill=hex_to_rgb("#ffffff"),
+            outline=hex_to_rgb("#d8dee8"),
+            width=2,
+        )
+        draw.rounded_rectangle(
+            (table_left, TABLE_TOP, table_right, TABLE_TOP + HEADER_H),
+            radius=18,
+            fill=hex_to_rgb("#f5f7fa"),
+        )
+        draw.rectangle(
+            (table_left, TABLE_TOP + HEADER_H - 20, table_right, TABLE_TOP + HEADER_H),
+            fill=hex_to_rgb("#f5f7fa"),
+        )
+
+        headers = ["Rank", "Team", leaderboard_export_metric_header(metric_key)]
+        x = table_left
+        for header, width in zip(headers, col_widths):
+            draw_text_center(
+                draw,
+                (x, TABLE_TOP, x + width, TABLE_TOP + HEADER_H),
+                header.upper(),
+                header_font,
+                hex_to_rgb("#64748b"),
+            )
+            x += width
+
+        y = TABLE_TOP + HEADER_H
+        draw.line((table_left, y, table_right, y), fill=hex_to_rgb("#d8dee8"), width=1)
+
+        badge_size = 48
+        opponent_badge_size = 42
+        for index, row in enumerate(rows[:10], start=1):
+            row_top = TABLE_TOP + HEADER_H + (index - 1) * ROW_H
+            row_bottom = row_top + ROW_H
+            draw.line((table_left, row_bottom, table_right, row_bottom), fill=hex_to_rgb("#edf1f5"), width=1)
+
+            x = table_left
+            draw_text_center(
+                draw,
+                (x, row_top, x + rank_w, row_bottom),
+                str(index),
+                rank_font,
+                hex_to_rgb("#64748b"),
+            )
+            x += rank_w
+
+            badge = load_club_badge_image(row["team"], badge_size)
+            badge_x = x + ((team_w - badge_size) / 2)
+            badge_y = row_top + ((ROW_H - badge_size) / 2)
+            if badge is not None:
+                img.paste(badge, (int(badge_x), int(badge_y)), badge)
+            else:
+                draw.ellipse(
+                    (badge_x, badge_y, badge_x + badge_size, badge_y + badge_size),
+                    fill=hex_to_rgb("#e5e7eb"),
+                )
+                draw_text_center(
+                    draw,
+                    (badge_x, badge_y, badge_x + badge_size, badge_y + badge_size),
+                    "\u26bd",
+                    header_font,
+                    hex_to_rgb("#64748b"),
+                )
+            x += team_w
+
+            metric_cells = [
+                row["rounds"].get(round_name)
+                for round_name in selected_rounds
+                if row["rounds"].get(round_name)
+            ]
+            cell = metric_cells[0] if metric_cells else None
+            if cell:
+                opponent_badge = load_club_badge_image(
+                    cell["opponent"],
+                    opponent_badge_size,
+                )
+                opponent_badge_x = x + ((metric_w - opponent_badge_size) / 2)
+                opponent_badge_y = row_top + 13
+                if opponent_badge is not None:
+                    img.paste(
+                        opponent_badge,
+                        (int(opponent_badge_x), int(opponent_badge_y)),
+                        opponent_badge,
+                    )
+                else:
+                    draw.ellipse(
+                        (
+                            opponent_badge_x,
+                            opponent_badge_y,
+                            opponent_badge_x + opponent_badge_size,
+                            opponent_badge_y + opponent_badge_size,
+                        ),
+                        fill=hex_to_rgb("#e5e7eb"),
+                    )
+                    draw_text_center(
+                        draw,
+                        (
+                            opponent_badge_x,
+                            opponent_badge_y,
+                            opponent_badge_x + opponent_badge_size,
+                            opponent_badge_y + opponent_badge_size,
+                        ),
+                        "\u26bd",
+                        header_font,
+                        hex_to_rgb("#64748b"),
+                    )
+                draw_text_center(
+                    draw,
+                    (x, row_top + 56, x + metric_w, row_bottom - 4),
+                    format_leaderboard_value(cell[metric_key], metric_key),
+                    value_font,
+                    hex_to_rgb("#0f7a45"),
+                )
+            else:
+                draw_text_center(
+                    draw,
+                    (x, row_top, x + metric_w, row_bottom),
+                    "-",
+                    value_font,
+                    hex_to_rgb("#94a3b8"),
+                )
+
+        x = table_left
+        for width in col_widths[:-1]:
+            x += width
+            draw.line((x, TABLE_TOP, x, TABLE_TOP + table_h), fill=hex_to_rgb("#edf1f5"), width=1)
+
+        if not rows:
+            draw_text_center(
+                draw,
+                (table_left, TABLE_TOP + HEADER_H, table_right, TABLE_TOP + 260),
+                "No leaderboard data available yet.",
+                subtitle_font,
+                hex_to_rgb("#64748b"),
+            )
+
+        footer_divider_y = min(TABLE_TOP + table_h + 40, EXPORT_H - 88)
+        footer_text_y = footer_divider_y + 24
+        draw.line((MARGIN_X, footer_divider_y, EXPORT_W - MARGIN_X, footer_divider_y), fill=hex_to_rgb("#d1d5db"), width=2)
+        draw.text((MARGIN_X, footer_text_y), "Graphics by FPL Cartel", font=footer_font, fill=hex_to_rgb("#111827"))
+        draw.text((EXPORT_W - 430, footer_text_y), "Source: Pinnacle odds via The Odds API", font=footer_font, fill=hex_to_rgb("#111827"))
+
+        output = BytesIO()
+        img.save(output, format="PNG")
+        output.seek(0)
+        return output
+
     table_left = MARGIN_X
     table_right = EXPORT_W - MARGIN_X
     table_w = table_right - table_left
