@@ -3871,11 +3871,11 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
     draw.text((MARGIN_X, 120), leaderboard_range, font=subtitle_font, fill=hex_to_rgb("#4b5563"))
 
     rows = build_efl_leaderboard_rows(fixtures, metric_key)
-    table_left = MARGIN_X
-    table_right = EXPORT_W - MARGIN_X
-    table_w = table_right - table_left
-    rank_w = round(table_w * 0.08)
-    team_w = round(table_w * 0.07)
+    table_w = round(EXPORT_W * 0.58)
+    table_left = round((EXPORT_W - table_w) / 2)
+    table_right = table_left + table_w
+    rank_w = round(table_w * 0.12)
+    team_w = round(table_w * 0.16)
     fixture_w = table_w - rank_w - team_w
     col_widths = [rank_w, team_w, fixture_w]
     table_h = HEADER_H + min(10, len(rows)) * ROW_H
@@ -3897,7 +3897,12 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
         fill=hex_to_rgb("#f5f7fa"),
     )
 
-    headers = ["Rank", "Team", "Projected Goals"]
+    metric_header = (
+        "Projected Goals"
+        if metric_key == "projected_goals"
+        else "Clean Sheet %"
+    )
+    headers = ["Rank", "Team", metric_header]
     x = table_left
     for header, width in zip(headers, col_widths):
         draw_text_center(
