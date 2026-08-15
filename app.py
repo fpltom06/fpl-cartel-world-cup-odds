@@ -3487,21 +3487,22 @@ def load_club_badge_image(team):
         return None
 
 
-def load_efl_badge_image(team):
+def load_efl_badge_image(team, size=34):
     badge_path = get_efl_badge_path(team)
     if not badge_path:
         return None
 
-    if badge_path in _EFL_BADGE_CACHE:
-        return _EFL_BADGE_CACHE[badge_path]
+    cache_key = (badge_path, size)
+    if cache_key in _EFL_BADGE_CACHE:
+        return _EFL_BADGE_CACHE[cache_key]
 
     try:
         badge = Image.open(badge_path).convert("RGBA")
-        badge.thumbnail((34, 34), Image.LANCZOS)
-        canvas = Image.new("RGBA", (34, 34), (0, 0, 0, 0))
-        offset = ((34 - badge.width) // 2, (34 - badge.height) // 2)
+        badge.thumbnail((size, size), Image.LANCZOS)
+        canvas = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+        offset = ((size - badge.width) // 2, (size - badge.height) // 2)
         canvas.paste(badge, offset, badge)
-        _EFL_BADGE_CACHE[badge_path] = canvas
+        _EFL_BADGE_CACHE[cache_key] = canvas
         return canvas
     except Exception:
         return None
@@ -3870,20 +3871,13 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
     draw.text((MARGIN_X, 120), leaderboard_range, font=subtitle_font, fill=hex_to_rgb("#4b5563"))
 
     rows = build_efl_leaderboard_rows(fixtures, metric_key)
-    max_fixture_cols = max(
-        1,
-        max((len(row["fixtures"]) for row in rows), default=1),
-    )
-    max_fixture_cols = min(max_fixture_cols, 3)
-
     table_left = MARGIN_X
     table_right = EXPORT_W - MARGIN_X
     table_w = table_right - table_left
     rank_w = 72
-    team_w = 300
-    total_w = 150
-    fixture_w = (table_w - rank_w - team_w - total_w) / max_fixture_cols
-    col_widths = [rank_w, team_w] + [fixture_w] * max_fixture_cols + [total_w]
+    team_w = 116
+    fixture_w = table_w - rank_w - team_w
+    col_widths = [rank_w, team_w, fixture_w]
     table_h = HEADER_H + min(10, len(rows)) * ROW_H
 
     draw.rounded_rectangle(
@@ -3903,9 +3897,7 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
         fill=hex_to_rgb("#f5f7fa"),
     )
 
-    headers = ["Rank", "Team"] + [
-        f"Fixture {index}" for index in range(1, max_fixture_cols + 1)
-    ] + ["Total"]
+    headers = ["Rank", "Team", "Fixture 1"]
     x = table_left
     for header, width in zip(headers, col_widths):
         draw_text_center(
@@ -3929,46 +3921,52 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
         draw_text_center(draw, (x, row_top, x + rank_w, row_bottom), str(index), rank_font, hex_to_rgb("#64748b"))
         x += rank_w
 
-        draw_team_badge(img, draw, row["team"], x + 20, row_top + 30, header_font, "EFL Fantasy")
-        draw_text_fit(draw, (x + 66, row_top + 32), row["team"], team_font, hex_to_rgb("#111827"), team_w - 82)
+        badge_size = 48
+        badge = load_efl_badge_image(row["team"], badge_size)
+        badge_x = x + ((team_w - badge_size) / 2)
+        badge_y = row_top + ((ROW_H - badge_size) / 2)
+        if badge is not None:
+            img.paste(badge, (int(badge_x), int(badge_y)), badge)
+        else:
+            draw.ellipse(
+                (badge_x, badge_y, badge_x + badge_size, badge_y + badge_size),
+                fill=hex_to_rgb("#e5e7eb"),
+            )
+            draw_text_center(
+                draw,
+                (badge_x, badge_y, badge_x + badge_size, badge_y + badge_size),
+                "\u26bd",
+                header_font,
+                hex_to_rgb("#64748b"),
+            )
         x += team_w
 
-        for fixture_index in range(max_fixture_cols):
-            cell = row["fixtures"][fixture_index] if fixture_index < len(row["fixtures"]) else None
-            if cell:
-                draw_wrapped_text_center(
-                    draw,
-                    (x + 10, row_top + 9, x + fixture_w - 10, row_top + 50),
-                    cell["opponent"],
-                    opponent_font,
-                    hex_to_rgb("#111827"),
-                    max_lines=2,
-                    line_height=1.15,
-                )
-                draw_text_center(
-                    draw,
-                    (x, row_top + 50, x + fixture_w, row_bottom - 6),
-                    format_leaderboard_value(cell[metric_key], metric_key),
-                    value_font,
-                    hex_to_rgb("#0f7a45"),
-                )
-            else:
-                draw_text_center(
-                    draw,
-                    (x, row_top, x + fixture_w, row_bottom),
-                    "-",
-                    value_font,
-                    hex_to_rgb("#94a3b8"),
-                )
-            x += fixture_w
-
-        draw_text_center(
-            draw,
-            (x, row_top, x + total_w, row_bottom),
-            format_leaderboard_value(row["total"], metric_key),
-            total_font,
-            hex_to_rgb("#0f7a45"),
-        )
+        cell = row["fixtures"][0] if row["fixtures"] else None
+        if cell:
+            draw_wrapped_text_center(
+                draw,
+                (x + 16, row_top + 9, x + fixture_w - 16, row_top + 50),
+                cell["opponent"],
+                opponent_font,
+                hex_to_rgb("#111827"),
+                max_lines=2,
+                line_height=1.15,
+            )
+            draw_text_center(
+                draw,
+                (x, row_top + 50, x + fixture_w, row_bottom - 6),
+                format_leaderboard_value(cell[metric_key], metric_key),
+                value_font,
+                hex_to_rgb("#0f7a45"),
+            )
+        else:
+            draw_text_center(
+                draw,
+                (x, row_top, x + fixture_w, row_bottom),
+                "-",
+                value_font,
+                hex_to_rgb("#94a3b8"),
+            )
 
     x = table_left
     for width in col_widths[:-1]:
