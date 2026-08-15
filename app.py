@@ -3874,8 +3874,8 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
     table_left = MARGIN_X
     table_right = EXPORT_W - MARGIN_X
     table_w = table_right - table_left
-    rank_w = 72
-    team_w = 116
+    rank_w = round(table_w * 0.08)
+    team_w = round(table_w * 0.10)
     fixture_w = table_w - rank_w - team_w
     col_widths = [rank_w, team_w, fixture_w]
     table_h = HEADER_H + min(10, len(rows)) * ROW_H
