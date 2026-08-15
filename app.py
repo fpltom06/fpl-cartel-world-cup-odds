@@ -2554,30 +2554,29 @@ def slugify_team_name(name):
 
 
 EFL_BADGE_ALIASES = {
-    "AFC Wimbledon": "AFC Wimbledon",
-    "Bolton Wanderers": "Bolton",
-    "Bradford City": "Bradford",
-    "Cambridge United": "Cambridge",
-    "Crawley Town": "Crawley",
-    "Doncaster Rovers": "Doncaster",
-    "Fleetwood Town": "Fleetwood",
-    "Huddersfield Town": "Huddersfield",
-    "Lincoln City": "Lincoln City",
-    "Luton Town": "Luton",
-    "Newport County": "Newport",
-    "Northampton Town": "Northampton",
-    "Oldham Athletic": "Oldham",
-    "Peterborough United": "Peterborough",
-    "Port Vale": "Port Vale",
-    "Preston North End": "Preston",
-    "Queens Park Rangers": "Queens Park Rangers",
-    "Rochdale": "Rochdale",
-    "Shrewsbury Town": "Shrewsbury Town",
-    "Stoke City": "Stoke City",
-    "Swansea City": "Swansea",
-    "Swindon Town": "Swindon",
-    "Wigan Athletic": "Wigan",
-    "Wrexham": "Wrexham",
+    "Bromley FC": "bromley",
+    "Mansfield Town": "mansfield-town",
+    "Milton Keynes Dons": "mk-dons",
+    "Stockport County FC": "stockport-county",
+    "Wimbledon": "afc-wimbledon",
+    "AFC Wimbledon": "afc-wimbledon",
+    "Bolton Wanderers": "bolton",
+    "Bradford City": "bradford",
+    "Cambridge United": "cambridge",
+    "Crawley Town": "crawley",
+    "Doncaster Rovers": "doncaster",
+    "Fleetwood Town": "fleetwood",
+    "Huddersfield Town": "huddersfield",
+    "Luton Town": "luton",
+    "Newport County": "newport",
+    "Northampton Town": "northampton",
+    "Oldham Athletic": "oldham",
+    "Peterborough United": "peterborough",
+    "Preston North End": "preston",
+    "Swansea City": "swansea",
+    "Swindon Town": "swindon",
+    "Wigan Athletic": "wigan",
+    "Wrexham": "wrexham-afc",
 }
 
 
@@ -2606,22 +2605,46 @@ def efl_badge_file_index(_signature=None):
     return index
 
 
+def efl_badge_candidate_paths(team_name):
+    clean = str(team_name or "").strip()
+    alias_slug = EFL_BADGE_ALIASES.get(clean)
+    slugs = []
+    if alias_slug:
+        slugs.append(alias_slug)
+    slugs.append(slugify_team_name(clean))
+    slugs.append(slugify_team_name(re.sub(r"\s+FC$", "", clean, flags=re.IGNORECASE)))
+    slugs.append(slugify_team_name(re.sub(r"\s+Town$", "", clean, flags=re.IGNORECASE)))
+
+    unique_slugs = []
+    for slug in slugs:
+        if slug and slug not in unique_slugs:
+            unique_slugs.append(slug)
+
+    candidates = []
+    for slug in unique_slugs:
+        candidates.extend(
+            [
+                f"assets/efl_badges/{slug}.png",
+                f"assets/efl_badges/{slug}.webp",
+                f"assets/efl_badges/{slug}.jpg",
+            ]
+        )
+    return unique_slugs[0] if unique_slugs else "", candidates
+
+
 def get_efl_badge_path(team_name):
-    candidates = [
-        str(team_name or "").strip(),
-        EFL_BADGE_ALIASES.get(str(team_name or "").strip(), ""),
-    ]
-    badge_index = efl_badge_file_index(efl_badge_dir_signature())
-    for candidate in candidates:
-        if not candidate:
-            continue
-        slug = slugify_team_name(candidate)
-        path = f"assets/efl_badges/{slug}.png"
+    _primary_slug, candidates = efl_badge_candidate_paths(team_name)
+    for path in candidates:
         if os.path.exists(path):
             return path
+
+    badge_index = efl_badge_file_index(efl_badge_dir_signature())
+    for path in candidates:
+        slug = Path(path).stem
         indexed_path = badge_index.get(slug)
         if indexed_path and os.path.exists(indexed_path):
             return indexed_path
+
     return None
 
 
@@ -3094,17 +3117,27 @@ def filter_by_efl_range(fixtures, selected_range):
     ]
 
 
-def missing_efl_badge_names(fixtures):
+def missing_efl_badge_rows(fixtures):
     if fixtures is None or fixtures.empty:
         return []
 
-    teams = set()
+    rows = []
+    seen = set()
     for fixture in fixtures.to_dict("records"):
         for key in ("home_team", "away_team"):
             team = fixture.get(key)
-            if team and not get_efl_badge_path(team):
-                teams.add(str(team))
-    return sorted(teams)
+            if not team or team in seen or get_efl_badge_path(team):
+                continue
+            seen.add(team)
+            slug, candidate_paths = efl_badge_candidate_paths(team)
+            rows.append(
+                {
+                    "Team name": str(team),
+                    "Slug being searched": slug,
+                    "Exact candidate paths checked": " | ".join(candidate_paths),
+                }
+            )
+    return sorted(rows, key=lambda row: row["Team name"])
 
 
 def format_projected_goals(value):
@@ -5242,18 +5275,12 @@ def render_efl_dashboard():
     render_efl_top_teams_section(filtered, selected_range)
 
     with st.expander("Missing EFL badges", expanded=False):
-        missing_badges = missing_efl_badge_names(fixtures)
+        missing_badges = missing_efl_badge_rows(fixtures)
         if missing_badges:
-            st.write(
-                pd.DataFrame(
-                    {
-                        "Team": missing_badges,
-                        "Expected file": [
-                            f"assets/efl_badges/{slugify_team_name(team)}.png"
-                            for team in missing_badges
-                        ],
-                    }
-                )
+            st.dataframe(
+                pd.DataFrame(missing_badges),
+                use_container_width=True,
+                hide_index=True,
             )
         else:
             st.caption("No missing EFL badges for the currently returned fixtures.")
