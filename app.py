@@ -50,6 +50,7 @@ ODDS_API_BASE_URL = "https://api.the-odds-api.com/v4/sports"
 FPL_FIXTURES_URL = "https://fantasy.premierleague.com/api/fixtures/"
 FPL_BOOTSTRAP_URL = "https://fantasy.premierleague.com/api/bootstrap-static/"
 MARKETS = "h2h,totals,spreads"
+SHOW_PREMIER_LEAGUE = False
 COMPETITIONS = {
     "Premier League": {
         "sport_key": "soccer_epl",
@@ -61,11 +62,15 @@ EFL_COMPETITIONS = {
     "League One": "soccer_england_league1",
     "League Two": "soccer_england_league2",
 }
+UWCL_COMPETITION_NAME = "Women's Champions League"
+UWCL_SPORT_KEY = "soccer_uefa_champs_league_women"
 EFL_RANGE_OPTIONS = [
     "All available fixtures",
     "Current EFL GW",
     "Next EFL GW",
 ]
+UWCL_SOURCE_LABEL = "Pinnacle, Bet365, then best available"
+UWCL_SOURCE_TEXT = "Pinnacle, Bet365, then best available via"
 UK_TZ = ZoneInfo("Europe/London")
 NO_LIVE_ODDS_MESSAGE = (
     "No live betting odds available yet. This usually happens when fixtures "
@@ -89,6 +94,14 @@ LOGO_CANDIDATES = [
 
 def make_fixture_id(commence_time, home_team, away_team):
     return f"{commence_time or 'tbd'}::{home_team}::{away_team}"
+
+
+def enabled_competition_names():
+    return [
+        name
+        for name in COMPETITIONS
+        if name != "Premier League" or SHOW_PREMIER_LEAGUE
+    ]
 
 st.set_page_config(
     page_title="FPL Cartel Odds Dashboard",
@@ -1508,9 +1521,10 @@ def mobile_styles():
 
 def render_mobile_dashboard():
     mobile_styles()
+    mobile_competitions = enabled_competition_names() + ["EFL Fantasy"]
     selected_competition = st.selectbox(
         "Competition",
-        list(COMPETITIONS.keys()) + ["EFL Fantasy"],
+        mobile_competitions,
         key="mobile_competition",
     )
     if selected_competition == "EFL Fantasy":
@@ -2311,6 +2325,8 @@ def get_flag_url(team_name):
 def get_team_badge_url(team_name, competition_name="World Cup"):
     if competition_name == "EFL Fantasy":
         return get_efl_badge_src(team_name)
+    if competition_name == UWCL_COMPETITION_NAME:
+        return get_uwcl_badge_src(team_name)
     if competition_name == "Premier League":
         return get_premier_league_badge_url(team_name)
     return get_flag_url(team_name)
@@ -2650,6 +2666,127 @@ def get_efl_badge_path(team_name):
 
 def get_efl_badge_src(team_name):
     badge_path = get_efl_badge_path(team_name)
+    if not badge_path:
+        return ""
+
+    data = base64.b64encode(Path(badge_path).read_bytes()).decode("ascii")
+    return f"data:image/png;base64,{data}"
+
+
+UWCL_BADGE_ALIASES = {
+    "Arsenal Women": "arsenal",
+    "Arsenal W": "arsenal",
+    "Barcelona Women": "barcelona",
+    "FC Barcelona Women": "barcelona",
+    "Chelsea Women": "chelsea",
+    "Chelsea W": "chelsea",
+    "Lyon Women": "lyon",
+    "Olympique Lyonnais Women": "lyon",
+    "OL Lyonnes": "lyon",
+    "Paris SG Women": "paris-saint-germain",
+    "Paris Saint-Germain Women": "paris-saint-germain",
+    "PSG Women": "paris-saint-germain",
+    "Bayern Munich Women": "bayern-munich",
+    "Bayern München Women": "bayern-munich",
+    "Real Madrid Women": "real-madrid",
+    "Real Madrid Femenino": "real-madrid",
+    "Juventus Women": "juventus",
+    "Roma Women": "roma",
+    "Manchester City Women": "manchester-city",
+    "Man City Women": "manchester-city",
+    "Manchester United Women": "manchester-united",
+    "Man United Women": "manchester-united",
+    "Wolfsburg Women": "wolfsburg",
+    "VfL Wolfsburg Women": "wolfsburg",
+    "Benfica Women": "benfica",
+    "SL Benfica Women": "benfica",
+    "Ajax Women": "ajax",
+    "FC Twente Women": "twente",
+    "Twente Women": "twente",
+    "Häcken Women": "hacken",
+    "BK Häcken Women": "hacken",
+    "Hacken Women": "hacken",
+    "St. Polten Women": "st-polten",
+    "St Pölten Women": "st-polten",
+    "St Polten Women": "st-polten",
+    "Valerenga Women": "valerenga",
+    "Vålerenga Women": "valerenga",
+}
+
+
+def uwcl_badge_dir_signature():
+    badge_dir = Path("assets/uwcl_badges")
+    if not badge_dir.exists():
+        return ()
+
+    return tuple(
+        sorted(
+            (badge_path.name, badge_path.stat().st_mtime_ns)
+            for badge_path in badge_dir.glob("*.png")
+        )
+    )
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def uwcl_badge_file_index(_signature=None):
+    badge_dir = Path("assets/uwcl_badges")
+    if not badge_dir.exists():
+        return {}
+
+    index = {}
+    for badge_path in badge_dir.glob("*.png"):
+        index[slugify_team_name(badge_path.stem)] = str(badge_path)
+    return index
+
+
+def uwcl_badge_candidate_paths(team_name):
+    clean = str(team_name or "").strip()
+    alias_slug = UWCL_BADGE_ALIASES.get(clean)
+    slugs = []
+    if alias_slug:
+        slugs.append(alias_slug)
+
+    cleaned_variants = [
+        clean,
+        re.sub(r"\s+Women$", "", clean, flags=re.IGNORECASE),
+        re.sub(r"\s+W$", "", clean, flags=re.IGNORECASE),
+        re.sub(r"\s+Femenino$", "", clean, flags=re.IGNORECASE),
+        re.sub(r"\s+Féminine$", "", clean, flags=re.IGNORECASE),
+    ]
+    for variant in cleaned_variants:
+        slug = slugify_team_name(variant)
+        if slug:
+            slugs.append(slug)
+
+    unique_slugs = []
+    for slug in slugs:
+        if slug and slug not in unique_slugs:
+            unique_slugs.append(slug)
+
+    candidates = []
+    for slug in unique_slugs:
+        candidates.append(f"assets/uwcl_badges/{slug}.png")
+    return unique_slugs[0] if unique_slugs else "", candidates
+
+
+def get_uwcl_badge_path(team_name):
+    _primary_slug, candidates = uwcl_badge_candidate_paths(team_name)
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+
+    badge_index = uwcl_badge_file_index(uwcl_badge_dir_signature())
+    for path in candidates:
+        slug = Path(path).stem
+        indexed_path = badge_index.get(slug)
+        if indexed_path and os.path.exists(indexed_path):
+            return indexed_path
+
+    return None
+
+
+def get_uwcl_badge_src(team_name):
+    badge_path = get_uwcl_badge_path(team_name)
     if not badge_path:
         return ""
 
@@ -3059,6 +3196,104 @@ def parse_efl_odds_response(events_payload, league_name, odds_payload=None):
     return pd.DataFrame(rows)
 
 
+def parse_uwcl_odds_response(payload):
+    rows = []
+    for event in payload or []:
+        commence_time = event.get("commence_time")
+        date_label, kickoff, _unused_label = parse_commence_time(commence_time)
+        commence_time_dt = parse_commence_datetime(commence_time)
+        home_team = event.get("home_team", "Home team")
+        away_team = event.get("away_team", "Away team")
+        home_xg, away_xg, debug = project_efl_goals_from_event(
+            event,
+            UWCL_COMPETITION_NAME,
+        )
+        total_line = debug["total_line"]
+        home_spread = debug["spread_line"]
+        odds_note = (
+            "Odds unavailable"
+            if total_line is None or home_spread is None
+            else ""
+        )
+
+        rows.append(
+            {
+                "fixture_id": event.get("id")
+                or make_fixture_id(commence_time, home_team, away_team),
+                "date": date_label,
+                "kickoff": kickoff,
+                "round": "GW1",
+                "commence_time": commence_time,
+                "commence_time_dt": commence_time_dt,
+                "fixture_set": UWCL_COMPETITION_NAME,
+                "league": UWCL_COMPETITION_NAME,
+                "league_label": "UWCL",
+                "home_team": home_team,
+                "away_team": away_team,
+                "home_badge": team_badge(home_team),
+                "away_badge": team_badge(away_team),
+                "home_xg": home_xg,
+                "away_xg": away_xg,
+                "home_cs": calculate_clean_sheet_percent(away_xg),
+                "away_cs": calculate_clean_sheet_percent(home_xg),
+                "total_line": total_line,
+                "home_spread": home_spread,
+                "bookmaker_used": debug["bookmaker_used"],
+                "bookmaker_tier": debug["bookmaker_tier"],
+                "has_totals": debug["has_totals"],
+                "has_spreads": debug["has_spreads"],
+                "status": debug["status"],
+                "h2h_used": debug["h2h_used"],
+                "btts_used": debug["btts_used"],
+                "correct_score_used": debug["correct_score_used"],
+                "odds_note": odds_note,
+                "delta": "Live odds",
+                "source": "api",
+            }
+        )
+
+    if not rows:
+        return pd.DataFrame(rows)
+
+    fixtures = pd.DataFrame(rows).sort_values("commence_time_dt").reset_index(drop=True)
+    return assign_uwcl_gameweeks(fixtures)
+
+
+def assign_uwcl_gameweeks(fixtures, max_days_in_matchday=3):
+    if fixtures.empty:
+        return fixtures
+
+    fixtures = fixtures.copy().sort_values("commence_time_dt").reset_index(drop=True)
+    match_dates = []
+    for dt in fixtures["commence_time_dt"].tolist():
+        local_dt = as_uk_datetime(dt)
+        if local_dt is not None:
+            match_dates.append(local_dt.date())
+
+    unique_dates = sorted(set(match_dates))
+    date_to_gw = {}
+    current_gw = 0
+    previous_date = None
+    cluster_start = None
+    for match_date in unique_dates:
+        starts_new_gw = (
+            previous_date is None
+            or (match_date - previous_date).days > max_days_in_matchday
+            or (cluster_start is not None and (match_date - cluster_start).days > max_days_in_matchday)
+        )
+        if starts_new_gw:
+            current_gw += 1
+            cluster_start = match_date
+        date_to_gw[match_date] = f"GW{current_gw}"
+        previous_date = match_date
+
+    fixtures["gameweek"] = fixtures["commence_time_dt"].apply(
+        lambda dt: date_to_gw.get(as_uk_datetime(dt).date()) if as_uk_datetime(dt) else "GW1"
+    )
+    fixtures["round"] = fixtures["gameweek"]
+    return fixtures
+
+
 def efl_gw_window(offset_weeks=0):
     now_uk = datetime.now(UK_TZ)
     days_since_thursday = (now_uk.weekday() - 3) % 7
@@ -3117,6 +3352,34 @@ def filter_by_efl_range(fixtures, selected_range):
     ]
 
 
+def uwcl_gameweek_options(fixtures):
+    if fixtures is None or fixtures.empty or "gameweek" not in fixtures.columns:
+        return ["GW1"]
+
+    def gw_sort_key(label):
+        match = re.search(r"(\d+)", str(label))
+        return int(match.group(1)) if match else 999
+
+    options = sorted(
+        {str(gameweek) for gameweek in fixtures["gameweek"].dropna()},
+        key=gw_sort_key,
+    )
+    return options or ["GW1"]
+
+
+def default_uwcl_gameweek(fixtures):
+    options = uwcl_gameweek_options(fixtures)
+    if fixtures is None or fixtures.empty:
+        return options[0]
+
+    now = datetime.now(timezone.utc)
+    for gameweek in options:
+        gw_fixtures = fixtures[fixtures["gameweek"].astype(str) == gameweek]
+        if any(gw_fixtures["commence_time_dt"] > now):
+            return gameweek
+    return options[-1]
+
+
 def missing_efl_badge_rows(fixtures):
     if fixtures is None or fixtures.empty:
         return []
@@ -3130,6 +3393,29 @@ def missing_efl_badge_rows(fixtures):
                 continue
             seen.add(team)
             slug, candidate_paths = efl_badge_candidate_paths(team)
+            rows.append(
+                {
+                    "Team name": str(team),
+                    "Slug being searched": slug,
+                    "Exact candidate paths checked": " | ".join(candidate_paths),
+                }
+            )
+    return sorted(rows, key=lambda row: row["Team name"])
+
+
+def missing_uwcl_badge_rows(fixtures):
+    if fixtures is None or fixtures.empty:
+        return []
+
+    rows = []
+    seen = set()
+    for fixture in fixtures.to_dict("records"):
+        for key in ("home_team", "away_team"):
+            team = fixture.get(key)
+            if not team or team in seen or get_uwcl_badge_path(team):
+                continue
+            seen.add(team)
+            slug, candidate_paths = uwcl_badge_candidate_paths(team)
             rows.append(
                 {
                     "Team name": str(team),
@@ -3381,6 +3667,7 @@ CELL_COLORS = {
 _FLAG_CACHE = {}
 _CLUB_BADGE_CACHE = {}
 _EFL_BADGE_CACHE = {}
+_UWCL_BADGE_CACHE = {}
 
 
 def hex_to_rgb(hex_color):
@@ -3509,12 +3796,37 @@ def load_efl_badge_image(team, size=34):
         return None
 
 
+def load_uwcl_badge_image(team, size=34):
+    badge_path = get_uwcl_badge_path(team)
+    if not badge_path:
+        return None
+
+    cache_key = (badge_path, size)
+    if cache_key in _UWCL_BADGE_CACHE:
+        return _UWCL_BADGE_CACHE[cache_key]
+
+    try:
+        badge = Image.open(badge_path).convert("RGBA")
+        badge.thumbnail((size, size), Image.LANCZOS)
+        canvas = Image.new("RGBA", (size, size), (255, 255, 255, 0))
+        offset = ((size - badge.width) // 2, (size - badge.height) // 2)
+        canvas.paste(badge, offset, badge)
+        _UWCL_BADGE_CACHE[cache_key] = canvas
+        return canvas
+    except Exception:
+        return None
+
+
 def draw_team_badge(img, draw, team, x, y, font, competition_name="World Cup"):
-    if competition_name in ("Premier League", "EFL Fantasy"):
+    if competition_name in ("Premier League", "EFL Fantasy", UWCL_COMPETITION_NAME):
         badge = (
             load_efl_badge_image(team)
             if competition_name == "EFL Fantasy"
-            else load_club_badge_image(team)
+            else (
+                load_uwcl_badge_image(team)
+                if competition_name == UWCL_COMPETITION_NAME
+                else load_club_badge_image(team)
+            )
         )
         if badge is not None:
             img.paste(badge, (int(x), int(y)), badge)
@@ -4185,6 +4497,181 @@ def build_efl_leaderboard_image(fixtures, metric_key, leaderboard_range):
     return output
 
 
+def build_uwcl_leaderboard_image(fixtures, metric_key, leaderboard_range):
+    EXPORT_W = 1080
+    EXPORT_H = 1350
+    BG = "#f3f6f9"
+    MARGIN_X = 55
+    TABLE_TOP = 178
+    HEADER_H = 50
+    ROW_H = 94
+
+    img = Image.new("RGB", (EXPORT_W, EXPORT_H), hex_to_rgb(BG))
+    draw = ImageDraw.Draw(img)
+
+    title_font = load_font(38, bold=True)
+    subtitle_font = load_font(22)
+    link_font = load_font(16)
+    header_font = load_font(15, bold=True)
+    rank_font = load_font(22, bold=True)
+    value_font = load_font(28, bold=True)
+    footer_font = load_font(18)
+
+    logo = load_export_logo(66)
+    img.paste(logo, (MARGIN_X, 30), logo)
+    draw.text((MARGIN_X + 84, 29), metric_title(metric_key), font=title_font, fill=hex_to_rgb("#111827"))
+    draw.text((MARGIN_X + 86, 77), "FPL Cartel Women's Champions League Odds Dashboard", font=link_font, fill=hex_to_rgb("#64748b"))
+    draw.text((MARGIN_X, 120), leaderboard_range, font=subtitle_font, fill=hex_to_rgb("#4b5563"))
+
+    rows = build_efl_leaderboard_rows(fixtures, metric_key)
+    table_w = round(EXPORT_W * 0.58)
+    table_left = round((EXPORT_W - table_w) / 2)
+    table_right = table_left + table_w
+    rank_w = round(table_w * 0.12)
+    team_w = round(table_w * 0.16)
+    fixture_w = table_w - rank_w - team_w
+    col_widths = [rank_w, team_w, fixture_w]
+    table_h = HEADER_H + min(10, len(rows)) * ROW_H
+
+    draw.rounded_rectangle(
+        (table_left, TABLE_TOP, table_right, TABLE_TOP + table_h),
+        radius=18,
+        fill=hex_to_rgb("#ffffff"),
+        outline=hex_to_rgb("#d8dee8"),
+        width=2,
+    )
+    draw.rounded_rectangle(
+        (table_left, TABLE_TOP, table_right, TABLE_TOP + HEADER_H),
+        radius=18,
+        fill=hex_to_rgb("#f5f7fa"),
+    )
+    draw.rectangle(
+        (table_left, TABLE_TOP + HEADER_H - 20, table_right, TABLE_TOP + HEADER_H),
+        fill=hex_to_rgb("#f5f7fa"),
+    )
+
+    headers = ["Rank", "Team", leaderboard_export_metric_header(metric_key)]
+    x = table_left
+    for header, width in zip(headers, col_widths):
+        draw_text_center(
+            draw,
+            (x, TABLE_TOP, x + width, TABLE_TOP + HEADER_H),
+            header.upper(),
+            header_font,
+            hex_to_rgb("#64748b"),
+        )
+        x += width
+
+    y = TABLE_TOP + HEADER_H
+    draw.line((table_left, y, table_right, y), fill=hex_to_rgb("#d8dee8"), width=1)
+
+    for index, row in enumerate(rows[:10], start=1):
+        row_top = TABLE_TOP + HEADER_H + (index - 1) * ROW_H
+        row_bottom = row_top + ROW_H
+        draw.line((table_left, row_bottom, table_right, row_bottom), fill=hex_to_rgb("#edf1f5"), width=1)
+
+        x = table_left
+        draw_text_center(draw, (x, row_top, x + rank_w, row_bottom), str(index), rank_font, hex_to_rgb("#64748b"))
+        x += rank_w
+
+        badge_size = 48
+        badge = load_uwcl_badge_image(row["team"], badge_size)
+        badge_x = x + ((team_w - badge_size) / 2)
+        badge_y = row_top + ((ROW_H - badge_size) / 2)
+        if badge is not None:
+            img.paste(badge, (int(badge_x), int(badge_y)), badge)
+        else:
+            draw.ellipse(
+                (badge_x, badge_y, badge_x + badge_size, badge_y + badge_size),
+                fill=hex_to_rgb("#e5e7eb"),
+            )
+            draw_text_center(
+                draw,
+                (badge_x, badge_y, badge_x + badge_size, badge_y + badge_size),
+                "\u26bd",
+                header_font,
+                hex_to_rgb("#64748b"),
+            )
+        x += team_w
+
+        cell = row["fixtures"][0] if row["fixtures"] else None
+        if cell:
+            opponent_badge_size = 42
+            opponent_badge = load_uwcl_badge_image(cell["opponent"], opponent_badge_size)
+            opponent_badge_x = x + ((fixture_w - opponent_badge_size) / 2)
+            opponent_badge_y = row_top + 13
+            if opponent_badge is not None:
+                img.paste(
+                    opponent_badge,
+                    (int(opponent_badge_x), int(opponent_badge_y)),
+                    opponent_badge,
+                )
+            else:
+                draw.ellipse(
+                    (
+                        opponent_badge_x,
+                        opponent_badge_y,
+                        opponent_badge_x + opponent_badge_size,
+                        opponent_badge_y + opponent_badge_size,
+                    ),
+                    fill=hex_to_rgb("#e5e7eb"),
+                )
+                draw_text_center(
+                    draw,
+                    (
+                        opponent_badge_x,
+                        opponent_badge_y,
+                        opponent_badge_x + opponent_badge_size,
+                        opponent_badge_y + opponent_badge_size,
+                    ),
+                    "\u26bd",
+                    header_font,
+                    hex_to_rgb("#64748b"),
+                )
+            draw_text_center(
+                draw,
+                (x, row_top + 56, x + fixture_w, row_bottom - 4),
+                format_leaderboard_value(cell[metric_key], metric_key),
+                value_font,
+                hex_to_rgb("#0f7a45"),
+            )
+        else:
+            draw_text_center(
+                draw,
+                (x, row_top, x + fixture_w, row_bottom),
+                "-",
+                value_font,
+                hex_to_rgb("#94a3b8"),
+            )
+
+    x = table_left
+    for width in col_widths[:-1]:
+        x += width
+        draw.line((x, TABLE_TOP, x, TABLE_TOP + table_h), fill=hex_to_rgb("#edf1f5"), width=1)
+
+    if not rows:
+        draw_text_center(
+            draw,
+            (table_left, TABLE_TOP + HEADER_H, table_right, TABLE_TOP + 260),
+            "No leaderboard data available yet.",
+            subtitle_font,
+            hex_to_rgb("#64748b"),
+        )
+
+    footer_divider_y = min(TABLE_TOP + table_h + 40, EXPORT_H - 88)
+    footer_text_y = footer_divider_y + 24
+    draw.line((MARGIN_X, footer_divider_y, EXPORT_W - MARGIN_X, footer_divider_y), fill=hex_to_rgb("#d1d5db"), width=2)
+    draw.text((MARGIN_X, footer_text_y), "Graphics by FPL Cartel", font=footer_font, fill=hex_to_rgb("#111827"))
+    source_text = "Source: Pinnacle, Bet365, then best available via The Odds API"
+    source_width = draw.textlength(source_text, font=footer_font)
+    draw.text((EXPORT_W - MARGIN_X - source_width, footer_text_y), source_text, font=footer_font, fill=hex_to_rgb("#111827"))
+
+    output = BytesIO()
+    img.save(output, format="PNG")
+    output.seek(0)
+    return output
+
+
 def build_export_image(fixtures_to_show, selected_round, competition_name="World Cup"):
     EXPORT_W = 1920
     EXPORT_H = 1080
@@ -4370,7 +4857,11 @@ def build_export_image(fixtures_to_show, selected_round, competition_name="World
         font=footer_bold,
         fill=hex_to_rgb("#111827"),
     )
-    source_text = "Source: Pinnacle odds via The Odds API"
+    source_text = (
+        "Source: Pinnacle, Bet365, then best available via The Odds API"
+        if competition_name == UWCL_COMPETITION_NAME
+        else "Source: Pinnacle odds via The Odds API"
+    )
     source_width = draw.textlength(source_text, font=footer_font)
     draw.text(
         (EXPORT_W - LEFT_X - source_width, FOOTER_TEXT_Y),
@@ -4442,7 +4933,7 @@ def render_export_team_flag(team_name, competition_name="World Cup"):
         return '<span class="export-flag-fallback" aria-hidden="true">&#9917;</span>'
     badge_class = (
         "export-flag export-club-badge"
-        if competition_name == "Premier League"
+        if competition_name in ("Premier League", "EFL Fantasy", UWCL_COMPETITION_NAME)
         else "export-flag"
     )
     return (
@@ -4736,7 +5227,7 @@ def build_export_html(fixtures_to_show, selected_round, export_page, total_expor
     </main>
     <footer class="export-footer">
       <div>Graphics by <strong>FPL Cartel</strong></div>
-      <div>Source: Pinnacle odds via <strong>The Odds API</strong></div>
+      <div>Source: {escape(UWCL_SOURCE_TEXT if competition_name == UWCL_COMPETITION_NAME else "Pinnacle odds via")} <strong>The Odds API</strong></div>
     </footer>
   </section>
 </body>
@@ -4749,7 +5240,7 @@ def render_team_flag(team_name, competition_name="World Cup"):
         return '<div class="team-flag-fallback" aria-hidden="true">&#9917;</div>'
     badge_class = (
         "team-flag team-club-badge"
-        if competition_name == "Premier League"
+        if competition_name in ("Premier League", "EFL Fantasy", UWCL_COMPETITION_NAME)
         else "team-flag"
     )
     return (
@@ -4924,7 +5415,7 @@ def render_leaderboard_table(
     )
 
 
-def render_efl_leaderboard_table(fixtures, metric_key):
+def render_efl_leaderboard_table(fixtures, metric_key, competition_name="EFL Fantasy"):
     rows = build_efl_leaderboard_rows(fixtures, metric_key)
     if not rows:
         return '<div class="empty-note">No team ranking data available yet.</div>'
@@ -4949,7 +5440,7 @@ def render_efl_leaderboard_table(fixtures, metric_key):
             "<tr>"
             f'<td class="top-rank-cell"><span class="top-rank">{index}</span></td>'
             '<td class="top-team-cell">'
-            f"{render_team_flag(row['team'], 'EFL Fantasy')}"
+            f"{render_team_flag(row['team'], competition_name)}"
             f'<span>{escape(str(row["team"]))}</span>'
             "</td>"
             f'{"".join(fixture_cells)}'
@@ -5360,6 +5851,66 @@ def render_efl_top_teams_section(fixtures, selected_range):
         )
 
 
+def render_uwcl_top_teams_section(fixtures, selected_gameweek):
+    st.markdown(
+        """
+        <section class="top-teams-section">
+          <div class="section-kicker">FPL Cartel model</div>
+          <h2>Top Teams by GW</h2>
+          <p>Opponent and model-estimated value for each team's selected Women's Champions League gameweek.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+    goals_tab, cs_tab = st.tabs(["Projected Goals", "Clean Sheet %"])
+    with goals_tab:
+        st.markdown(
+            render_efl_leaderboard_table(
+                fixtures,
+                "projected_goals",
+                UWCL_COMPETITION_NAME,
+            ),
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            "Download leaderboard image",
+            data=build_uwcl_leaderboard_image(
+                fixtures,
+                "projected_goals",
+                selected_gameweek,
+            ),
+            file_name=(
+                "fpl-cartel-uwcl-leaderboard-projected-goals-"
+                f"{selected_gameweek.lower().replace(' ', '-')}.png"
+            ),
+            mime="image/png",
+            key="UWCL_download_projected_goals_leaderboard",
+        )
+    with cs_tab:
+        st.markdown(
+            render_efl_leaderboard_table(
+                fixtures,
+                "clean_sheet_pct",
+                UWCL_COMPETITION_NAME,
+            ),
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            "Download leaderboard image",
+            data=build_uwcl_leaderboard_image(
+                fixtures,
+                "clean_sheet_pct",
+                selected_gameweek,
+            ),
+            file_name=(
+                "fpl-cartel-uwcl-leaderboard-clean-sheet-"
+                f"{selected_gameweek.lower().replace(' ', '-')}.png"
+            ),
+            mime="image/png",
+            key="UWCL_download_clean_sheet_leaderboard",
+        )
+
+
 def efl_bookmaker_quality_counts(fixtures):
     counts = {
         "Fixtures using Pinnacle": 0,
@@ -5483,15 +6034,188 @@ def render_efl_dashboard():
         st.json(raw_payloads)
 
 
+def render_uwcl_dashboard():
+    desktop_styles()
+    source_note = f"Live odds via The Odds API &middot; {UWCL_SOURCE_LABEL}"
+    st.markdown(render_brand_header(UWCL_COMPETITION_NAME), unsafe_allow_html=True)
+
+    payload, api_error, status_code, last_updated = fetch_odds(UWCL_SPORT_KEY)
+    last_updated_text = format_last_updated(last_updated)
+    source_note_html = source_note + (
+        f"<br>{escape(last_updated_text)}" if last_updated_text else ""
+    )
+    st.markdown(
+        f'<div class="source-note">{source_note_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+    if api_error:
+        st.error("Live odds unavailable: API request failed. Check markets/API plan.")
+        st.caption(f"Details: {api_error}")
+        with st.expander("Women's Champions League API debug", expanded=False):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "sport_key": UWCL_SPORT_KEY,
+                            "status_code": status_code,
+                            "events_returned": 0,
+                            "response_message": api_error,
+                        }
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        return
+
+    fixtures = parse_uwcl_odds_response(payload)
+    if fixtures.empty:
+        st.markdown(f'<div class="empty-note">{NO_LIVE_ODDS_MESSAGE}</div>', unsafe_allow_html=True)
+        with st.expander("Women's Champions League API debug", expanded=False):
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "sport_key": UWCL_SPORT_KEY,
+                            "status_code": status_code,
+                            "events_returned": len(payload or []),
+                            "fixtures_parsed": 0,
+                            "missing_fixtures": "No priced fixtures returned by The Odds API.",
+                        }
+                    ]
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+        return
+
+    gw_options = uwcl_gameweek_options(fixtures)
+    default_gw = default_uwcl_gameweek(fixtures)
+    selected_gameweek = st.selectbox(
+        "Gameweek",
+        gw_options,
+        index=gw_options.index(default_gw) if default_gw in gw_options else 0,
+        key="UWCL_gameweek",
+    )
+    filtered = fixtures[fixtures["gameweek"].astype(str) == selected_gameweek]
+
+    control_cols = st.columns([1.2, 1.2, 1.6])
+    with control_cols[0]:
+        st.segmented_control(
+            "Neutral venue",
+            ["Off"],
+            default="Off",
+            key="UWCL_neutral_venue",
+        )
+    with control_cols[1]:
+        export_page_size = 10
+        total_export_pages = max(1, math.ceil(len(filtered) / export_page_size))
+        export_page_options = [
+            f"Export page {page_number}"
+            for page_number in range(1, total_export_pages + 1)
+        ]
+        if total_export_pages > 1:
+            selected_export_page_label = st.selectbox(
+                "Export page",
+                export_page_options,
+                key="UWCL_export_page",
+            )
+            selected_export_page = export_page_options.index(selected_export_page_label) + 1
+        else:
+            selected_export_page = 1
+    with control_cols[2]:
+        export_start = (selected_export_page - 1) * export_page_size
+        export_end = export_start + export_page_size
+        export_fixtures = filtered.iloc[export_start:export_end]
+        st.download_button(
+            "Download fixture image",
+            data=build_export_image_bytes(
+                export_fixtures,
+                selected_gameweek,
+                selected_export_page,
+                total_export_pages,
+                UWCL_COMPETITION_NAME,
+            ),
+            file_name=(
+                "fpl-cartel-womens-champions-league-odds-"
+                f"{selected_gameweek.lower().replace(' ', '-')}-"
+                f"page-{selected_export_page}.png"
+            ),
+            mime="image/png",
+            key="UWCL_download_fixture_image",
+        )
+
+    if filtered.empty:
+        st.markdown(
+            '<div class="empty-note">No Women\'s Champions League fixtures available for this gameweek.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            render_export_area(
+                filtered,
+                None,
+                UWCL_COMPETITION_NAME,
+                UWCL_SOURCE_TEXT,
+            ),
+            unsafe_allow_html=True,
+        )
+
+    render_uwcl_top_teams_section(filtered, selected_gameweek)
+
+    with st.expander("Missing UWCL badges", expanded=False):
+        missing_badges = missing_uwcl_badge_rows(fixtures)
+        if missing_badges:
+            st.dataframe(
+                pd.DataFrame(missing_badges),
+                use_container_width=True,
+                hide_index=True,
+            )
+        else:
+            st.caption("No missing UWCL badges for the currently returned fixtures.")
+
+    with st.expander("Women's Champions League fixture debug", expanded=False):
+        st.dataframe(
+            build_fixture_debug_table(fixtures),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    with st.expander("Women's Champions League API debug", expanded=False):
+        st.dataframe(
+            pd.DataFrame(
+                [
+                    {
+                        "sport_key": UWCL_SPORT_KEY,
+                        "status_code": status_code,
+                        "events_returned": len(payload or []),
+                        "fixtures_parsed": len(fixtures),
+                        "selected_gw": selected_gameweek,
+                        "selected_gw_fixtures": len(filtered),
+                        "missing_fixtures": "Only fixtures returned by The Odds API can be displayed.",
+                    }
+                ]
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.json(payload)
+
+
 def render_desktop_dashboard():
     desktop_styles()
-    premier_league_tab, efl_tab = st.tabs(
-        ["Premier League", "EFL Fantasy"]
-    )
-    with premier_league_tab:
-        render_competition_dashboard("Premier League")
-    with efl_tab:
-        render_efl_dashboard()
+    tab_names = [UWCL_COMPETITION_NAME] + enabled_competition_names() + ["EFL Fantasy"]
+    tabs = st.tabs(tab_names)
+
+    for tab_name, tab in zip(tab_names, tabs):
+        with tab:
+            if tab_name == "EFL Fantasy":
+                render_efl_dashboard()
+            elif tab_name == UWCL_COMPETITION_NAME:
+                render_uwcl_dashboard()
+            else:
+                render_competition_dashboard(tab_name)
 
 
 is_mobile = view == "mobile"
